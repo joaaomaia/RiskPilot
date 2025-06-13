@@ -73,6 +73,13 @@ def _psi_single(p_base: np.ndarray, p_test: np.ndarray) -> float:
     return float(delta.sum())
 
 
+def _rgba(color: str, alpha: float) -> str:
+    """Return RGBA string with given opacity from ``rgb(r,g,b)`` input."""
+    if color.startswith("rgb(") and color.endswith(")"):
+        return color.replace("rgb", "rgba").replace(")", f",{alpha})")
+    return color
+
+
 class BinaryPerformanceEvaluator:
     """Evaluate binary classifier performance on multiple splits.
 
@@ -143,6 +150,11 @@ class BinaryPerformanceEvaluator:
         self.save_dir = Path(save_dir) if save_dir is not None else None
         if self.save_dir:
             self.save_dir.mkdir(parents=True, exist_ok=True)
+
+        if hasattr(self.model, "classes_") and 1 in getattr(self.model, "classes_"):
+            self._pos_class_idx = list(self.model.classes_).index(1)
+        else:
+            self._pos_class_idx = 1
 
         self._validate_data()
         self._parse_date_col()
@@ -293,7 +305,9 @@ class BinaryPerformanceEvaluator:
         """Reliability diagram for test split using Plotly."""
         self._validate_predictors()
         y_true = self.df_test[self.target_col].values
-        y_pred_proba = self.model.predict_proba(self.df_test[self.predictor_cols])[:, 1]
+        y_pred_proba = self.model.predict_proba(
+            self.df_test[self.predictor_cols]
+        )[:, self._pos_class_idx]
         prob_true, prob_pred = calibration_curve(
             y_true,
             y_pred_proba,
@@ -576,7 +590,7 @@ class BinaryPerformanceEvaluator:
             df["Period"] = pd.to_datetime(df[self.date_col]).dt.to_period("M")
             for period, grp in df.groupby("Period"):
                 y_true = grp[self.target_col].values
-                y_pred = self.model.predict_proba(grp[self.predictor_cols])[:, 1]
+                y_pred = self.model.predict_proba(grp[self.predictor_cols])[:, self._pos_class_idx]
                 ks = ks_stat(y_true, y_pred)
                 ks_records.append(
                     {"Split": split_name, "Period": period.to_timestamp(), "KS": ks}
@@ -648,8 +662,10 @@ class BinaryPerformanceEvaluator:
                     theta=features,
                     fill="toself",
                     name=f"Group {group_id}",
-                    line=dict(color=self.group_palette_.get(group_id)),
-                    fillcolor=self.group_palette_.get(group_id),
+                    line=dict(
+                        color=_rgba(self.group_palette_.get(group_id), 0.8)
+                    ),
+                    fillcolor=_rgba(self.group_palette_.get(group_id), 0.3),
                 )
             )
 
@@ -853,7 +869,7 @@ class BinaryPerformanceEvaluator:
             dfs.append(("val", self.df_val))
 
         for name, df in dfs:
-            proba = self.model.predict_proba(df[self.predictor_cols])[:, 1]
+            proba = self.model.predict_proba(df[self.predictor_cols])[:, self._pos_class_idx]
             df[self.score_col_] = proba
             df[self.label_col_] = (proba >= self.threshold).astype(int)
             df["Split"] = name.capitalize()
@@ -883,7 +899,7 @@ class BinaryPerformanceEvaluator:
                 min_prebin_size=0.01,
                 max_n_bins=5,
                 min_bin_size=0.05,
-                monotonic_trend="ascending",
+                monotonic_trend="descending",
             )
             optb.fit(
                 self.df_train[self.score_col_] * 1000, self.df_train[self.target_col]
