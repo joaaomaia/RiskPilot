@@ -86,6 +86,7 @@ print(evaluator.report)
 ---
 
 ## 📊 Funcionalidades
+- Todos os gráficos aceitam parâmetro ``title`` para personalização
 
 ### ✅ Métricas Automáticas
 - MCC (Matthews Correlation Coefficient)
@@ -105,6 +106,7 @@ print(evaluator.report)
 
 ### 📈 Evolução de Eventos
 - Mostra taxa de evento (target=1) por grupo ao longo do tempo
+- Inclui barra empilhada com % de IDs por grupo
 
 ### 🧪 PSI por Variável
 - PSI por variável ao longo do tempo (usando `date_col`)
@@ -124,6 +126,7 @@ print(evaluator.report)
 
 - `.report` — dicionário Python contendo todas as métricas numéricas organizadas por split.
 - Gráficos: podem ser exibidos na tela ou salvos em `save_dir`.
+- `evaluator.binning_table()` retorna a tabela de binning (se houver).
 
 ---
 

@@ -46,6 +46,7 @@ import joblib
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import seaborn as sns
 from decile_plot import decile_analysis_plot
 from optbinning import OptimalBinning
@@ -189,6 +190,10 @@ class BinaryPerformanceEvaluator:
             }
             self.report[split_name] = metrics_dict
 
+    def binning_table(self) -> Any | None:
+        """Return the binning table used for homogeneous groups."""
+        return self.binning_table_
+
     def plot_confusion(
         self,
         y_true: pd.Series,
@@ -278,7 +283,9 @@ class BinaryPerformanceEvaluator:
         )
         return fig
 
-    def plot_calibration(self, *, n_bins: int = 10, save: bool = False) -> go.Figure:
+    def plot_calibration(
+        self, *, n_bins: int = 10, save: bool = False, title: str = ""
+    ) -> go.Figure:
         """Reliability diagram for test split using Plotly."""
         self._validate_predictors()
         y_true = self.df_test[self.target_col].values
@@ -302,7 +309,7 @@ class BinaryPerformanceEvaluator:
             )
         )
         fig.update_layout(
-            title=f"Calibration Curve – Test (Brier = {brier:.4f})",
+            title=title or f"Calibration Curve – Test (Brier = {brier:.4f})",
             xaxis_title="Predicted probability",
             yaxis_title="Observed frequency",
             template="plotly_white",
@@ -312,8 +319,12 @@ class BinaryPerformanceEvaluator:
             fig.write_image(str(self.save_dir / "calibration_curve.png"))
         return fig
 
-    def plot_event_rate(self, *, save: bool = False) -> go.Figure:
-        """Trend of event rate over time by group using Plotly."""
+    def plot_event_rate(self, *, save: bool = False, title: str = "") -> go.Figure:
+        """Trend of event rate over time by group using Plotly.
+
+        Adds a stacked bar chart with the share of ``id_cols`` per group below
+        the event rate curves.
+        """
         if self.date_col is None:
             raise ValueError("`date_col` is required for plot_event_rate().")
 
@@ -342,7 +353,22 @@ class BinaryPerformanceEvaluator:
             .sort_index()
         )
 
-        fig = go.Figure()
+        counts = (
+            df_all.groupby([self.date_col, group_col])
+            .size()
+            .unstack(group_col)
+            .fillna(0)
+            .sort_index()
+        )
+        pct = counts.div(counts.sum(axis=1), axis=0)
+
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            shared_xaxes=True,
+            row_heights=[0.6, 0.4],
+            vertical_spacing=0.05,
+        )
         for col in pivot.columns:
             fig.add_trace(
                 go.Scatter(
@@ -350,14 +376,29 @@ class BinaryPerformanceEvaluator:
                     y=pivot[col],
                     mode="lines+markers",
                     name=str(col),
-                )
+                ),
+                row=1,
+                col=1,
+            )
+        for col in pct.columns:
+            fig.add_trace(
+                go.Bar(
+                    x=pct.index,
+                    y=pct[col],
+                    name=str(col),
+                    showlegend=False,
+                ),
+                row=2,
+                col=1,
             )
         fig.update_layout(
-            title="Event Rate by Group over Time",
-            xaxis_title=self.date_col,
-            yaxis_title="Event rate",
+            barmode="stack",
+            title=title or "Event Rate by Group over Time",
             template="plotly_white",
         )
+        fig.update_yaxes(title_text="Event rate", row=1, col=1)
+        fig.update_yaxes(title_text="Group share", tickformat=".0%", row=2, col=1)
+        fig.update_xaxes(title_text=self.date_col, row=2, col=1)
         if save and self.save_dir:
             fig.write_image(str(self.save_dir / "event_rate.png"))
         return fig
@@ -370,6 +411,7 @@ class BinaryPerformanceEvaluator:
         min_obs: int = 100,
         eps: float = 1e-9,
         save: bool = False,
+        title: str = "",
     ) -> go.Figure:
         """Compute and plot PSI per variable through time using Plotly.
 
@@ -490,7 +532,7 @@ class BinaryPerformanceEvaluator:
             annotation_text="0.25",
         )
         fig.update_layout(
-            title="PSI over Time by Variable",
+            title=title or "PSI over Time by Variable",
             xaxis_title="Period",
             yaxis_title="Population Stability Index",
             template="plotly_white",
@@ -499,7 +541,7 @@ class BinaryPerformanceEvaluator:
             fig.write_image(str(self.save_dir / "psi_over_time.png"))
         return fig
 
-    def plot_ks(self, *, save: bool = False) -> go.Figure:
+    def plot_ks(self, *, save: bool = False, title: str = "") -> go.Figure:
         """KS statistic over time for each split using Plotly."""
         if self.date_col is None:
             raise ValueError("`date_col` is required for plot_ks().")
@@ -546,7 +588,7 @@ class BinaryPerformanceEvaluator:
             y=0.05, line=dict(color="gray", dash="dash"), annotation_text="0.05"
         )
         fig.update_layout(
-            title="KS Evolution over Time",
+            title=title or "KS Evolution over Time",
             xaxis_title="Period",
             yaxis_title="Kolmogorov–Smirnov",
             template="plotly_white",
@@ -561,6 +603,7 @@ class BinaryPerformanceEvaluator:
         *,
         scaler: Literal["zscore", "minmax"] = "zscore",
         save: bool = False,
+        title: str = "",
     ) -> go.Figure:
         """Return radar chart of average feature values per homogeneous group."""
         if self.group_ is None:
@@ -593,7 +636,10 @@ class BinaryPerformanceEvaluator:
                 )
             )
 
-        fig.update_layout(template="plotly_white")
+        fig.update_layout(
+            template="plotly_white",
+            title=title or "Group Radar",
+        )
         if save and self.save_dir:
             fig.write_image(str(self.save_dir / "group_radar.png"))
         return fig
@@ -604,6 +650,7 @@ class BinaryPerformanceEvaluator:
         n_bins: int = 10,
         ascending: bool = True,
         group_id: int | None = None,
+        title: str = "",
         **kwargs: Any,
     ) -> go.Figure:
         """Wrapper around :func:`decile_analysis_plot` respecting groups."""
@@ -619,6 +666,7 @@ class BinaryPerformanceEvaluator:
             target_col=self.target_col,
             n_bins=n_bins,
             ascending=ascending,
+            title_prefix=title or "Ordenação por decil",
             **kwargs,
         )
         return fig

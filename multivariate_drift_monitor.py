@@ -42,17 +42,12 @@ report = monitor.get_report()
 
 from __future__ import annotations
 
-import json
 import logging
-import pathlib
-import joblib
 import numpy as np
 import pandas as pd
 from typing import List, Dict, Any, Optional
 
-from sklearn.metrics import mean_squared_error, mean_absolute_error
-from sklearn.decomposition import KernelPCA, PCA
-from sklearn.utils.validation import check_is_fitted
+from sklearn.decomposition import KernelPCA
 
 import plotly.graph_objects as go
 
@@ -60,7 +55,7 @@ try:
     # Keras pode não estar instalado — falhar graciosamente
     from tensorflow import keras  # type: ignore
     from tensorflow.keras import layers  # type: ignore
-except Exception as e:  # pragma: no cover
+except Exception:  # pragma: no cover
     keras = None
     layers = None
 
@@ -102,18 +97,18 @@ class MultivariateDriftMonitor:
         Se informado, calcula métricas em janela móvel (n observações).
     """
 
-    _METHODS = {'autoencoder', 'kpca'}
+    _METHODS = {"autoencoder", "kpca"}
 
     def __init__(
         self,
         *,
         features_cols: List[str],
         date_col: str,
-        method: str = 'autoencoder',
+        method: str = "autoencoder",
         variance_retained: Optional[float] = None,
         alert_sigma: float = 3.0,
         hidden_layers: Optional[List[int]] = None,
-        scaler_strategy: str = 'auto',
+        scaler_strategy: str = "auto",
         rolling_window: Optional[int] = None,
         random_state: int = 0,
         logger: Optional[logging.Logger] = None,
@@ -125,8 +120,9 @@ class MultivariateDriftMonitor:
         self.date_col = date_col
         self.method = method
         self.variance_retained = (
-            variance_retained if variance_retained is not None
-            else (0.65 if method == 'autoencoder' else 0.70)
+            variance_retained
+            if variance_retained is not None
+            else (0.65 if method == "autoencoder" else 0.70)
         )
         self.alert_sigma = alert_sigma
         self.hidden_layers = hidden_layers
@@ -144,8 +140,8 @@ class MultivariateDriftMonitor:
         self.logger = logger or logging.getLogger(__name__)
         if not self.logger.handlers:
             logging.basicConfig(
-                level=logging.INFO,
-                format="%(asctime)s %(levelname)s - %(message)s")
+                level=logging.INFO, format="%(asctime)s %(levelname)s - %(message)s"
+            )
 
     # ------------------------------------------------------------------
     # Fit
@@ -155,18 +151,21 @@ class MultivariateDriftMonitor:
         Ajusta scaler + modelo no dataset de referência.
         """
         self.logger.info("Fit: iniciando scaler (%s)", self.scaler_strategy)
-        self.scaler_ = DynamicScaler(strategy=self.scaler_strategy,
-                                     random_state=self.random_state)
+        self.scaler_ = DynamicScaler(
+            strategy=self.scaler_strategy, random_state=self.random_state
+        )
         X_base = df_base[self.features_cols]
         self.scaler_.fit(X_base)
-        X_scaled = self.scaler_.transform(X_base, return_df=False, keep_other_cols=False)
+        X_scaled = self.scaler_.transform(
+            X_base, return_df=False, keep_other_cols=False
+        )
 
         self.logger.info("Fit: treinando modelo (%s)", self.method)
-        if self.method == 'kpca':
+        if self.method == "kpca":
             n_comp = max(1, int(np.ceil(self.variance_retained * X_scaled.shape[1])))
             kpca = KernelPCA(
                 n_components=n_comp,
-                kernel='rbf',
+                kernel="rbf",
                 fit_inverse_transform=True,
                 random_state=self.random_state,
                 n_jobs=-1,
@@ -175,16 +174,15 @@ class MultivariateDriftMonitor:
         else:  # autoencoder
             if keras is None:
                 raise ImportError("TensorFlow/Keras não instalados para Autoencoder.")
-            latent_dim = max(1, int(np.ceil(self.variance_retained * X_scaled.shape[1])))
+            latent_dim = max(
+                1, int(np.ceil(self.variance_retained * X_scaled.shape[1]))
+            )
             input_dim = X_scaled.shape[1]
             hlayers = self._build_hidden_layers(input_dim, latent_dim)
             self.model_ = self._build_autoencoder(input_dim, latent_dim, hlayers)
 
-            self.model_.compile(optimizer='adam', loss='mse')
-            self.model_.fit(X_scaled, X_scaled,
-                            epochs=50,
-                            batch_size=256,
-                            verbose=0)
+            self.model_.compile(optimizer="adam", loss="mse")
+            self.model_.fit(X_scaled, X_scaled, epochs=50, batch_size=256, verbose=0)
 
         # Erro de reconstrução no base
         base_err = self._reconstruction_error(X_scaled)
@@ -194,23 +192,29 @@ class MultivariateDriftMonitor:
 
         self.logger.info(
             "Erro médio base %.5f (std %.5f) | Threshold = %.5f",
-            self.err_mean_, self.err_std_, self.err_threshold_
+            self.err_mean_,
+            self.err_std_,
+            self.err_threshold_,
         )
 
         # Histórico inicial
-        self.history_ = pd.DataFrame({
-            self.date_col: pd.to_datetime(df_base[self.date_col]),
-            'recon_error': base_err,
-            'is_drift': base_err > self.err_threshold_,
-            'origin': 'base',
-        })
+        self.history_ = pd.DataFrame(
+            {
+                self.date_col: pd.to_datetime(df_base[self.date_col]),
+                "recon_error": base_err,
+                "is_drift": base_err > self.err_threshold_,
+                "origin": "base",
+            }
+        )
 
         return self
 
     # ------------------------------------------------------------------
     # Score
     # ------------------------------------------------------------------
-    def score(self, df_new: pd.DataFrame, *, update_history: bool = True) -> pd.DataFrame:
+    def score(
+        self, df_new: pd.DataFrame, *, update_history: bool = True
+    ) -> pd.DataFrame:
         """
         Calcula erro de reconstrução em novos dados e retorna DataFrame
         com métricas agregadas por período (mesmo índice que df_new).
@@ -223,12 +227,14 @@ class MultivariateDriftMonitor:
         X_scaled = self.scaler_.transform(X_new, return_df=False, keep_other_cols=False)
         rec_err = self._reconstruction_error(X_scaled)
 
-        df_res = pd.DataFrame({
-            self.date_col: pd.to_datetime(df_new[self.date_col]),
-            'recon_error': rec_err,
-            'is_drift': rec_err > self.err_threshold_,
-            'origin': 'new',
-        })
+        df_res = pd.DataFrame(
+            {
+                self.date_col: pd.to_datetime(df_new[self.date_col]),
+                "recon_error": rec_err,
+                "is_drift": rec_err > self.err_threshold_,
+                "origin": "new",
+            }
+        )
 
         if update_history:
             self.history_ = pd.concat([self.history_, df_res], ignore_index=True)
@@ -238,7 +244,7 @@ class MultivariateDriftMonitor:
     # ------------------------------------------------------------------
     # Plot
     # ------------------------------------------------------------------
-    def plot_drift(self, *, show: bool = True, **kwargs) -> go.Figure:
+    def plot_drift(self, *, show: bool = True, title: str = "", **kwargs) -> go.Figure:
         """
         Gera gráfico Plotly com erros no tempo + faixa de alerta.
         """
@@ -246,24 +252,27 @@ class MultivariateDriftMonitor:
         df = self.history_.copy()
 
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=df[self.date_col],
-            y=df['recon_error'],
-            mode='markers',
-            name='Recon. error',
-            marker=dict(
-                color=np.where(df['is_drift'], 'crimson', 'steelblue'),
-                size=6,
-                opacity=0.7))
+        fig.add_trace(
+            go.Scatter(
+                x=df[self.date_col],
+                y=df["recon_error"],
+                mode="markers",
+                name="Recon. error",
+                marker=dict(
+                    color=np.where(df["is_drift"], "crimson", "steelblue"),
+                    size=6,
+                    opacity=0.7,
+                ),
+            )
         )
         fig.add_hline(
             y=self.err_threshold_,
-            line=dict(dash='dash'),
+            line=dict(dash="dash"),
             annotation_text=f"Threshold ({self.alert_sigma}σ)",
-            annotation_position="top left"
+            annotation_position="top left",
         )
         fig.update_layout(
-            title="Multivariate Drift Monitor — Reconstruction Error",
+            title=title or "Multivariate Drift Monitor — Reconstruction Error",
             xaxis_title=self.date_col,
             yaxis_title="Erro de reconstrução",
             template="plotly_white",
@@ -282,33 +291,35 @@ class MultivariateDriftMonitor:
 
         df = self.history_.copy()
         if self.rolling_window:
-            df['rolling_rmse'] = (
-                df['recon_error']
+            df["rolling_rmse"] = (
+                df["recon_error"]
                 .rolling(self.rolling_window, min_periods=1)
                 .apply(lambda x: np.sqrt(np.mean(x**2)), raw=True)
             )
 
-        grp = df.groupby(pd.to_datetime(df[self.date_col]).dt.date)['recon_error']
-        metrics = pd.DataFrame({
-            'RMSE': grp.apply(lambda x: np.sqrt(np.mean(x**2))),
-            'MAE': grp.apply(lambda x: np.mean(np.abs(x))),
-            'MSE': grp.apply(lambda x: np.mean(x**2)),
-        })
+        grp = df.groupby(pd.to_datetime(df[self.date_col]).dt.date)["recon_error"]
+        metrics = pd.DataFrame(
+            {
+                "RMSE": grp.apply(lambda x: np.sqrt(np.mean(x**2))),
+                "MAE": grp.apply(lambda x: np.mean(np.abs(x))),
+                "MSE": grp.apply(lambda x: np.mean(x**2)),
+            }
+        )
 
         return {
-            'params': {
-                'method': self.method,
-                'variance_retained': self.variance_retained,
-                'alert_sigma': self.alert_sigma,
-                'hidden_layers': self.hidden_layers,
-                'rolling_window': self.rolling_window,
+            "params": {
+                "method": self.method,
+                "variance_retained": self.variance_retained,
+                "alert_sigma": self.alert_sigma,
+                "hidden_layers": self.hidden_layers,
+                "rolling_window": self.rolling_window,
             },
-            'base_error': {
-                'mean': self.err_mean_,
-                'std': self.err_std_,
-                'threshold': self.err_threshold_,
+            "base_error": {
+                "mean": self.err_mean_,
+                "std": self.err_std_,
+                "threshold": self.err_threshold_,
             },
-            'metrics': metrics.to_dict(orient='index'),
+            "metrics": metrics.to_dict(orient="index"),
         }
 
     # ------------------------------------------------------------------
@@ -334,12 +345,12 @@ class MultivariateDriftMonitor:
         input_layer = layers.Input(shape=(input_dim,))
         x = input_layer
         for h in hidden_layers:
-            x = layers.Dense(h, activation='relu')(x)
+            x = layers.Dense(h, activation="relu")(x)
 
-        latent = layers.Dense(latent_dim, activation='relu', name='latent')(x)
+        latent = layers.Dense(latent_dim, activation="relu", name="latent")(x)
 
         y = latent
         for h in reversed(hidden_layers):
-            y = layers.Dense(h, activation='relu')(y)
-
-        output
+            y = layers.Dense(h, activation="relu")(y)
+        output_layer = layers.Dense(input_dim, activation="linear")(y)
+        return keras.Model(inputs=input_layer, outputs=output_layer)
