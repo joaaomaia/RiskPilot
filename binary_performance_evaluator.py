@@ -7,7 +7,7 @@ classifier across train / test / (optional) validation datasets.
 Requirements
 ------------
 Python >= 3.9
-pandas, numpy, scikit‑learn, matplotlib, seaborn
+pandas, numpy, scikit‑learn, matplotlib, seaborn, plotly, kaleido
 
 Quick Example
 -------------
@@ -22,7 +22,8 @@ evaluator = BinaryPerformanceEvaluator(
     id_cols=['contract_id'],
     date_col='snapshot_date',      # optional
     group_col='product_type',      # optional
-    save_dir='figs'                # optional
+    save_dir='figs',               # optional
+    threshold=0.5                  # optional
 )
 
 evaluator.compute_metrics()
@@ -46,6 +47,7 @@ import pandas as pd
 import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
+import plotly.graph_objects as go
 from sklearn.calibration import calibration_curve
 from sklearn.metrics import (
     matthews_corrcoef,
@@ -84,6 +86,8 @@ class BinaryPerformanceEvaluator:
         Categorical column for group analyses.
     save_dir : Optional[str|Path], default=None
         If provided, figures are saved to this directory in PNG format.
+    threshold : float, default 0.5
+        Probability cutoff used to convert scores into class labels.
 
     Notes
     -----
@@ -106,6 +110,7 @@ class BinaryPerformanceEvaluator:
         date_col: Optional[str] = None,
         group_col: Optional[str] = None,
         save_dir: Optional[Union[str, Path]] = None,
+        threshold: float = 0.5,
     ) -> None:
         self.model = self._load_model(model)
         self.df_train = df_train.copy()
@@ -115,6 +120,7 @@ class BinaryPerformanceEvaluator:
         self.id_cols = id_cols
         self.date_col = date_col
         self.group_col = group_col
+        self.threshold = threshold
 
         self.save_dir = Path(save_dir) if save_dir is not None else None
         if self.save_dir:
@@ -142,11 +148,11 @@ class BinaryPerformanceEvaluator:
             y_pred_proba = self.model.predict_proba(df[self.predictor_cols])[:, 1]
 
             metrics_dict = {
-                'MCC': matthews_corrcoef(y_true, (y_pred_proba >= 0.5).astype(int)),
+                'MCC': matthews_corrcoef(y_true, (y_pred_proba >= self.threshold).astype(int)),
                 'AUC_ROC': roc_auc_score(y_true, y_pred_proba),
                 'AUC_PR': average_precision_score(y_true, y_pred_proba),
-                'Precision': precision_score(y_true, (y_pred_proba >= 0.5).astype(int)),
-                'Recall': recall_score(y_true, (y_pred_proba >= 0.5).astype(int)),
+                'Precision': precision_score(y_true, (y_pred_proba >= self.threshold).astype(int)),
+                'Recall': recall_score(y_true, (y_pred_proba >= self.threshold).astype(int)),
                 'Brier': brier_score_loss(y_true, y_pred_proba),
             }
             self.report[split_name] = metrics_dict
@@ -164,7 +170,7 @@ class BinaryPerformanceEvaluator:
 
         for ax, (title, df) in zip(axes, split_dfs.items()):
             y_true = df[self.target_col]
-            y_pred = (self.model.predict_proba(df[self.predictor_cols])[:, 1] >= 0.5).astype(int)
+            y_pred = (self.model.predict_proba(df[self.predictor_cols])[:, 1] >= self.threshold).astype(int)
             cm = confusion_matrix(y_true, y_pred)
             cm_perc = cm / cm.sum()
 
@@ -195,30 +201,38 @@ class BinaryPerformanceEvaluator:
             plt.savefig(self.save_dir / 'confusion_matrices.png', dpi=200, bbox_inches='tight')
         plt.show()
 
-    def plot_calibration(self, *, n_bins: int = 10, save: bool = False) -> None:
-        """Reliability diagram for test split."""
+    def plot_calibration(self, *, n_bins: int = 10, save: bool = False, show: bool = True) -> go.Figure:
+        """Reliability diagram for test split using Plotly."""
         self._validate_predictors()
         y_true = self.df_test[self.target_col].values
         y_pred_proba = self.model.predict_proba(self.df_test[self.predictor_cols])[:, 1]
-        prob_true, prob_pred = calibration_curve(y_true, y_pred_proba, n_bins=n_bins, strategy='uniform')
+        prob_true, prob_pred = calibration_curve(
+            y_true,
+            y_pred_proba,
+            n_bins=n_bins,
+            strategy='uniform',
+        )
 
         brier = brier_score_loss(y_true, y_pred_proba)
 
-        plt.figure(figsize=(6, 6))
-        plt.plot(prob_pred, prob_true, marker='o', label='Model')
-        plt.plot([0, 1], [0, 1], '--', label='Ideal')
-        plt.xlabel('Predicted probability')
-        plt.ylabel('Observed frequency')
-        plt.title(f'Calibration Curve – Test (Brier = {brier:.4f})')
-        plt.legend()
-        plt.grid(True)
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=prob_pred, y=prob_true, mode='lines+markers', name='Model'))
+        fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode='lines', line=dict(dash='dash'), name='Ideal'))
+        fig.update_layout(
+            title=f'Calibration Curve – Test (Brier = {brier:.4f})',
+            xaxis_title='Predicted probability',
+            yaxis_title='Observed frequency',
+            template='plotly_white',
+        )
 
         if save and self.save_dir:
-            plt.savefig(self.save_dir / 'calibration_curve.png', dpi=200, bbox_inches='tight')
-        plt.show()
+            fig.write_image(str(self.save_dir / 'calibration_curve.png'))
+        if show:
+            fig.show()
+        return fig
 
-    def plot_event_rate(self, *, save: bool = False) -> None:
-        """Trend of event (target=1) rate over time by group."""
+    def plot_event_rate(self, *, save: bool = False, show: bool = True) -> go.Figure:
+        """Trend of event (target=1) rate over time by group using Plotly."""
         if self.date_col is None or self.group_col is None:
             raise ValueError('Both `date_col` and `group_col` are required for plot_event_rate().')
 
@@ -239,18 +253,30 @@ class BinaryPerformanceEvaluator:
             .sort_index()
         )
 
-        pivot.plot(figsize=(10, 6))
-        plt.ylabel('Event rate')
-        plt.title('Event Rate by Group over Time')
-        plt.legend(title=self.group_col, bbox_to_anchor=(1.05, 1.0))
-        plt.grid(True)
-
+        fig = go.Figure()
+        for col in pivot.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=pivot.index,
+                    y=pivot[col],
+                    mode='lines+markers',
+                    name=str(col),
+                )
+            )
+        fig.update_layout(
+            title='Event Rate by Group over Time',
+            xaxis_title=self.date_col,
+            yaxis_title='Event rate',
+            template='plotly_white',
+        )
         if save and self.save_dir:
-            plt.savefig(self.save_dir / 'event_rate.png', dpi=200, bbox_inches='tight')
-        plt.show()
+            fig.write_image(str(self.save_dir / 'event_rate.png'))
+        if show:
+            fig.show()
+        return fig
 
-    def plot_psi(self, *, bins: int = 10, save: bool = False) -> None:
-        """Compute & plot PSI per variable through time (date_col)."""
+    def plot_psi(self, *, bins: int = 10, save: bool = False, show: bool = True) -> go.Figure:
+        """Compute & plot PSI per variable through time using Plotly."""
         if self.date_col is None:
             raise ValueError('`date_col` is required for plot_psi().')
 
@@ -296,21 +322,32 @@ class BinaryPerformanceEvaluator:
             warnings.warn('PSI could not be computed (insufficient data).')
             return
 
-        plt.figure(figsize=(10, 6))
-        sns.lineplot(data=psi_df, x='Period', y='PSI', hue='Variable', marker='o')
-        plt.axhline(0.1, color='orange', linestyle='--', label='0.10')
-        plt.axhline(0.25, color='red', linestyle='--', label='0.25')
-        plt.ylabel('Population Stability Index')
-        plt.title('PSI over Time by Variable')
-        plt.legend(bbox_to_anchor=(1.05, 1.0))
-        plt.grid(True)
-
+        fig = go.Figure()
+        for var, grp in psi_df.groupby('Variable'):
+            fig.add_trace(
+                go.Scatter(
+                    x=grp['Period'],
+                    y=grp['PSI'],
+                    mode='lines+markers',
+                    name=str(var),
+                )
+            )
+        fig.add_hline(y=0.1, line=dict(color='orange', dash='dash'), annotation_text='0.10')
+        fig.add_hline(y=0.25, line=dict(color='red', dash='dash'), annotation_text='0.25')
+        fig.update_layout(
+            title='PSI over Time by Variable',
+            xaxis_title='Period',
+            yaxis_title='Population Stability Index',
+            template='plotly_white',
+        )
         if save and self.save_dir:
-            plt.savefig(self.save_dir / 'psi_over_time.png', dpi=200, bbox_inches='tight')
-        plt.show()
+            fig.write_image(str(self.save_dir / 'psi_over_time.png'))
+        if show:
+            fig.show()
+        return fig
 
-    def plot_ks(self, *, save: bool = False) -> None:
-        """KS statistic over time for each split."""
+    def plot_ks(self, *, save: bool = False, show: bool = True) -> go.Figure:
+        """KS statistic over time for each split using Plotly."""
         if self.date_col is None:
             raise ValueError('`date_col` is required for plot_ks().')
         self._validate_predictors()
@@ -340,17 +377,28 @@ class BinaryPerformanceEvaluator:
             warnings.warn('KS could not be computed (insufficient data).')
             return
 
-        plt.figure(figsize=(10, 6))
-        sns.lineplot(data=ks_df, x='Period', y='KS', hue='Split', marker='o')
-        plt.ylabel('Kolmogorov–Smirnov')
-        plt.title('KS Evolution over Time')
-        plt.axhline(0.05, color='gray', linestyle='--', label='0.05')
-        plt.legend(title='Data Split')
-        plt.grid(True)
-
+        fig = go.Figure()
+        for split, grp in ks_df.groupby('Split'):
+            fig.add_trace(
+                go.Scatter(
+                    x=grp['Period'],
+                    y=grp['KS'],
+                    mode='lines+markers',
+                    name=str(split),
+                )
+            )
+        fig.add_hline(y=0.05, line=dict(color='gray', dash='dash'), annotation_text='0.05')
+        fig.update_layout(
+            title='KS Evolution over Time',
+            xaxis_title='Period',
+            yaxis_title='Kolmogorov–Smirnov',
+            template='plotly_white',
+        )
         if save and self.save_dir:
-            plt.savefig(self.save_dir / 'ks_evolution.png', dpi=200, bbox_inches='tight')
-        plt.show()
+            fig.write_image(str(self.save_dir / 'ks_evolution.png'))
+        if show:
+            fig.show()
+        return fig
 
     ## ---------- helpers ----------
     def _load_model(self, model: Union[str, Path, object]):
