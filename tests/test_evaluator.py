@@ -124,3 +124,41 @@ def test_event_rate_plot_with_auto_groups():
 
     fig = evaluator.plot_event_rate()
     assert isinstance(fig, go.Figure)
+
+
+def test_binning_table_method():
+    train, test = _create_split()
+    model = LogisticRegression().fit(
+        train[[f"f{i}" for i in range(5)]], train["target"]
+    )
+
+    evaluator = BinaryPerformanceEvaluator(
+        model=model,
+        df_train=train,
+        df_test=test,
+        target_col="target",
+        id_cols=["id"],
+        date_col="date",
+        homogeneous_group="auto",
+    )
+
+    assert evaluator.binning_table() is not None
+
+
+def test_custom_plot_title():
+    train, test = _create_split()
+    model = LogisticRegression().fit(
+        train[[f"f{i}" for i in range(5)]], train["target"]
+    )
+
+    evaluator = BinaryPerformanceEvaluator(
+        model=model,
+        df_train=train,
+        df_test=test,
+        target_col="target",
+        id_cols=["id"],
+        date_col="date",
+    )
+
+    fig = evaluator.plot_calibration(title="My Plot")
+    assert fig.layout.title.text == "My Plot"
