@@ -403,6 +403,10 @@ class BinaryPerformanceEvaluator:
         if save and self.save_dir:
             fig_rate.write_image(str(self.save_dir / "event_rate.png"))
             fig_share.write_image(str(self.save_dir / "group_share.png"))
+
+        fig_rate.show()
+        fig_share.show()
+
         return fig_rate, fig_share
 
     def plot_psi(
