@@ -53,7 +53,7 @@ evaluator = BinaryPerformanceEvaluator(
 )
 
 # Calcula métricas
-evaluator.compute_metrics()
+metrics = evaluator.compute_metrics()
 
 # Gráficos
 evaluator.plot_confusion(save=True)
@@ -63,7 +63,7 @@ evaluator.plot_psi()
 evaluator.plot_ks()
 
 # Visualizar resultados numéricos
-print(evaluator.report)
+print(metrics)
 ```
 
 ---
@@ -125,6 +125,7 @@ print(evaluator.report)
 ## 📤 Saídas
 
 - `.report` — dicionário Python contendo todas as métricas numéricas organizadas por split.
+- `compute_metrics()` retorna um `DataFrame` com essas métricas.
 - Gráficos: podem ser exibidos na tela ou salvos em `save_dir`.
 - `evaluator.binning_table()` retorna a tabela de binning (se houver).
 

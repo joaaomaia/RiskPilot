@@ -163,13 +163,14 @@ class BinaryPerformanceEvaluator:
         self._assign_groups()
 
     ## ---------- public API ----------
-    def compute_metrics(self) -> None:
-        """Compute numeric metrics for train, test and (optional) validation."""
+    def compute_metrics(self) -> pd.DataFrame:
+        """Compute metrics and return them as a DataFrame."""
         self._validate_predictors()
         splits = {"train": self.df_train, "test": self.df_test}
         if self.df_val is not None:
             splits["val"] = self.df_val
 
+        records = []
         for split_name, df in splits.items():
             y_true = df[self.target_col].values
             y_pred_proba = df[self.score_col_].values
@@ -189,6 +190,9 @@ class BinaryPerformanceEvaluator:
                 "Brier": brier_score_loss(y_true, y_pred_proba),
             }
             self.report[split_name] = metrics_dict
+            records.append({"Split": split_name.capitalize(), **metrics_dict})
+
+        return pd.DataFrame(records).set_index("Split")
 
     def binning_table(self) -> Any | None:
         """Return the binning table used for homogeneous groups."""
@@ -652,6 +656,7 @@ class BinaryPerformanceEvaluator:
         fig.update_layout(
             template="plotly_white",
             title=title or "Group Radar",
+            polar=dict(radialaxis=dict(showticklabels=False)),
         )
         if save and self.save_dir:
             fig.write_image(str(self.save_dir / "group_radar.png"))
