@@ -869,7 +869,7 @@ class BinaryPerformanceEvaluator:
             dfs.append(("val", self.df_val))
 
         for name, df in dfs:
-            proba = self.model.predict_proba(df[self.predictor_cols])[:, self._pos_class_idx]
+            proba = 1 - self.model.predict_proba(df[self.predictor_cols])[:, self._pos_class_idx]
             df[self.score_col_] = proba
             df[self.label_col_] = (proba >= self.threshold).astype(int)
             df["Split"] = name.capitalize()
