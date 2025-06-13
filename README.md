@@ -1,0 +1,145 @@
+<p align="center">
+  <h1 align="center">🔍 Binary Performance Evaluator</h1>
+</p>
+
+<p align="center">
+  Avalie automaticamente modelos binários já treinados com métricas, gráficos e validações robustas.
+</p>
+
+---
+
+## 📌 Objetivo
+
+O **Binary Performance Evaluator** é uma classe Python que permite avaliar facilmente a performance de classificadores binários já treinados, carregando-os de arquivos `.joblib` / `.pkl` ou passando diretamente o objeto em memória.
+
+Ele compara desempenho em **treino**, **teste** e, opcionalmente, **validação**, com geração de métricas, gráficos de calibração, matrizes de confusão e muito mais.
+
+---
+
+## ⚙️ Instalação
+
+Requisitos:
+
+- Python ≥ 3.9  
+- Bibliotecas:
+  ```bash
+  pip install pandas numpy scikit-learn matplotlib seaborn
+  ```
+
+---
+
+## 🚀 Exemplo Rápido
+
+```python
+from binary_performance_evaluator import BinaryPerformanceEvaluator
+
+evaluator = BinaryPerformanceEvaluator(
+    model="modelo_treinado.pkl",   # caminho .pkl/.joblib ou objeto já carregado
+    df_train=df_train,
+    df_test=df_test,
+    df_val=df_val,                 # opcional
+    target_col="default_90d",
+    id_cols=["contract_id"],
+    date_col="snapshot_date",     # opcional
+    group_col="product_type",     # opcional
+    save_dir="resultados"         # opcional, salva gráficos como PNG
+)
+
+# Calcula métricas
+evaluator.compute_metrics()
+
+# Gráficos
+evaluator.plot_confusion(save=True)
+evaluator.plot_calibration()
+evaluator.plot_event_rate()
+evaluator.plot_psi()
+evaluator.plot_ks()
+
+# Visualizar resultados numéricos
+print(evaluator.report)
+```
+
+---
+
+## 🧠 Entradas Esperadas
+
+| Parâmetro | Tipo | Descrição |
+|-----------|------|-----------|
+| `model` | `str` / `Path` / objeto | Caminho para `.joblib` ou `.pkl`, ou modelo em memória |
+| `df_train` | `pd.DataFrame` | Base de treino |
+| `df_test` | `pd.DataFrame` | Base de teste |
+| `df_val` | `pd.DataFrame` | (Opcional) base de validação |
+| `target_col` | `str` | Nome da coluna alvo (0 = negativo, 1 = positivo) |
+| `id_cols` | `list[str]` | Colunas que identificam cada linha |
+| `date_col` | `str` | (Opcional) Coluna de data para análises temporais |
+| `group_col` | `str` | (Opcional) Coluna categórica para agrupamentos |
+| `save_dir` | `str` / `Path` | (Opcional) Diretório para salvar gráficos PNG |
+
+---
+
+## 📊 Funcionalidades
+
+### ✅ Métricas Automáticas
+- MCC (Matthews Correlation Coefficient)
+- AUC ROC e AUC PR
+- Precision, Recall
+- Brier Score
+
+### 🧱 Matriz de Confusão
+- Gráfico Seaborn com cores em contraste
+- Mostra valores absolutos e percentuais
+
+### 🎯 Curva de Calibração
+- Com Brier Score no título
+- Compara previsão × observação
+
+### 📈 Evolução de Eventos
+- Mostra taxa de evento (target=1) por grupo ao longo do tempo
+
+### 🧪 PSI por Variável
+- PSI por variável ao longo do tempo (usando `date_col`)
+- Indicação visual de faixas:
+  - PSI ≤ 0.10 (aceitável)
+  - PSI 0.10–0.25 (monitorar)
+  - PSI > 0.25 (alerta)
+
+### 🧭 KS Temporal
+- Mostra evolução do KS (Kolmogorov–Smirnov) no tempo para treino/teste/validação
+
+---
+
+## 📤 Saídas
+
+- `.report` — dicionário Python contendo todas as métricas numéricas organizadas por split.
+- Gráficos: podem ser exibidos na tela ou salvos em `save_dir`.
+
+---
+
+## 📁 Organização dos Gráficos
+
+Se `save_dir="resultados"`:
+
+```
+resultados/
+├── confusion_matrices.png
+├── calibration_curve.png
+├── event_rate.png
+├── psi_over_time.png
+└── ks_evolution.png
+```
+
+---
+
+## 🧪 Testado com
+
+- scikit-learn 1.4+
+- pandas 2.2+
+- numpy 1.26+
+- matplotlib 3.8+
+- seaborn 0.13+
+
+---
+
+## ✍️ Licença
+
+MIT License.
