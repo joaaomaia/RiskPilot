@@ -344,10 +344,13 @@ class BinaryPerformanceEvaluator:
         )
         df_all[self.date_col] = pd.to_datetime(df_all[self.date_col])
 
+        groups = sorted(df_all[group_col].unique())
+
         pivot = (
             df_all.groupby([self.date_col, group_col])[self.target_col]
             .mean()
             .unstack(group_col)
+            .reindex(columns=groups)
             .sort_index()
         )
 
@@ -355,7 +358,7 @@ class BinaryPerformanceEvaluator:
             df_all.groupby([self.date_col, group_col])
             .size()
             .unstack(group_col)
-            .fillna(0)
+            .reindex(columns=groups, fill_value=0)
             .sort_index()
         )
         pct = counts.div(counts.sum(axis=1), axis=0)
