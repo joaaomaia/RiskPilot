@@ -46,7 +46,6 @@ import joblib
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import seaborn as sns
 from decile_plot import decile_analysis_plot
 from optbinning import OptimalBinning
@@ -158,6 +157,7 @@ class BinaryPerformanceEvaluator:
         self.group_col_ = self.group_col if self.group_col else "homogeneous_group"
         self.group_: Dict[str, pd.Series] | None = None
         self.binning_table_: Any | None = None
+        self.group_palette_: Dict[Any, str] | None = None
 
         self._score_datasets()
         self._assign_groups()
@@ -319,12 +319,10 @@ class BinaryPerformanceEvaluator:
             fig.write_image(str(self.save_dir / "calibration_curve.png"))
         return fig
 
-    def plot_event_rate(self, *, save: bool = False, title: str = "") -> go.Figure:
-        """Trend of event rate over time by group using Plotly.
-
-        Adds a stacked bar chart with the share of ``id_cols`` per group below
-        the event rate curves.
-        """
+    def plot_event_rate(
+        self, *, save: bool = False, title: str = ""
+    ) -> tuple[go.Figure, go.Figure]:
+        """Return two figures with event rate and group share over time."""
         if self.date_col is None:
             raise ValueError("`date_col` is required for plot_event_rate().")
 
@@ -362,46 +360,50 @@ class BinaryPerformanceEvaluator:
         )
         pct = counts.div(counts.sum(axis=1), axis=0)
 
-        fig = make_subplots(
-            rows=2,
-            cols=1,
-            shared_xaxes=True,
-            row_heights=[0.6, 0.4],
-            vertical_spacing=0.05,
-        )
+        self._compute_group_palette()
+        colors = self.group_palette_ or {}
+
+        fig_rate = go.Figure()
         for col in pivot.columns:
-            fig.add_trace(
+            fig_rate.add_trace(
                 go.Scatter(
                     x=pivot.index,
                     y=pivot[col],
                     mode="lines+markers",
                     name=str(col),
-                ),
-                row=1,
-                col=1,
+                    line=dict(color=colors.get(col)),
+                )
             )
+        fig_rate.update_layout(
+            title=title or "Event Rate by Group over Time",
+            yaxis_title="Event rate",
+            xaxis_title=self.date_col,
+            template="plotly_white",
+        )
+
+        fig_share = go.Figure()
         for col in pct.columns:
-            fig.add_trace(
+            fig_share.add_trace(
                 go.Bar(
                     x=pct.index,
                     y=pct[col],
                     name=str(col),
-                    showlegend=False,
-                ),
-                row=2,
-                col=1,
+                    marker=dict(color=colors.get(col)),
+                )
             )
-        fig.update_layout(
+        fig_share.update_layout(
             barmode="stack",
-            title=title or "Event Rate by Group over Time",
+            title="Group Share over Time",
+            yaxis_title="Group share",
+            yaxis_tickformat=".0%",
+            xaxis_title=self.date_col,
             template="plotly_white",
         )
-        fig.update_yaxes(title_text="Event rate", row=1, col=1)
-        fig.update_yaxes(title_text="Group share", tickformat=".0%", row=2, col=1)
-        fig.update_xaxes(title_text=self.date_col, row=2, col=1)
+
         if save and self.save_dir:
-            fig.write_image(str(self.save_dir / "event_rate.png"))
-        return fig
+            fig_rate.write_image(str(self.save_dir / "event_rate.png"))
+            fig_share.write_image(str(self.save_dir / "group_share.png"))
+        return fig_rate, fig_share
 
     def plot_psi(
         self,
@@ -609,6 +611,8 @@ class BinaryPerformanceEvaluator:
         if self.group_ is None:
             raise ValueError("Homogeneous groups were not computed.")
 
+        self._compute_group_palette()
+
         df = self.data_.copy()
         if features is None:
             numeric_predictors = [
@@ -633,6 +637,8 @@ class BinaryPerformanceEvaluator:
                     theta=features,
                     fill="toself",
                     name=f"Group {group_id}",
+                    line=dict(color=self.group_palette_.get(group_id)),
+                    fillcolor=self.group_palette_.get(group_id),
                 )
             )
 
@@ -927,6 +933,24 @@ class BinaryPerformanceEvaluator:
             axis=0,
             ignore_index=True,
         )
+        self._compute_group_palette()
+
+    def _compute_group_palette(self) -> None:
+        """Create consistent colours per group based on event rate."""
+        group_col = None
+        for cand in [self.group_col, self.group_col_]:
+            if cand and cand in self.data_.columns:
+                group_col = cand
+                break
+        if group_col is None:
+            return
+
+        rates = self.data_.groupby(group_col)[self.target_col].mean().sort_values()
+        palette = sns.diverging_palette(240, 10, n=len(rates))
+        self.group_palette_ = {
+            grp: f"rgb({int(r*255)},{int(g*255)},{int(b*255)})"
+            for grp, (r, g, b) in zip(rates.index, palette)
+        }
 
     def _psi_variables(self) -> List[str]:
         """Select variables to evaluate for PSI (exclude id/date/target)."""

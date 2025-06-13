@@ -122,8 +122,9 @@ def test_event_rate_plot_with_auto_groups():
         homogeneous_group="auto",
     )
 
-    fig = evaluator.plot_event_rate()
-    assert isinstance(fig, go.Figure)
+    figs = evaluator.plot_event_rate()
+    assert isinstance(figs, tuple) and len(figs) == 2
+    assert all(isinstance(f, go.Figure) for f in figs)
 
 
 def test_binning_table_method():
