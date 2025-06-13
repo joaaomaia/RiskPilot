@@ -122,6 +122,9 @@ class BinaryPerformanceEvaluator:
 
         self._validate_data()
         self.predictor_cols = self._infer_predictors()
+        self.model_feature_names = self._get_model_feature_names()
+        self.model_n_features = self._get_model_n_features()
+        self.predictor_cols = self._align_predictors_with_model(self.predictor_cols)
         self.report: Dict[str, Dict[str, float]] = {}
 
     ## ---------- public API ----------
@@ -381,6 +384,47 @@ class BinaryPerformanceEvaluator:
         if not predictor_cols:
             raise ValueError('No predictor columns detected after exclusions.')
         return predictor_cols
+
+    def _get_model_feature_names(self) -> Optional[List[str]]:
+        """Return feature names used during model training, if available."""
+        if hasattr(self.model, 'feature_names_in_'):
+            return list(getattr(self.model, 'feature_names_in_'))
+        try:
+            booster = self.model.get_booster()
+            if hasattr(booster, 'feature_names'):
+                return list(booster.feature_names)
+        except Exception:
+            pass
+        return None
+
+    def _get_model_n_features(self) -> Optional[int]:
+        """Return the number of features the model expects, if available."""
+        if hasattr(self.model, 'n_features_in_'):
+            return int(getattr(self.model, 'n_features_in_'))
+        try:
+            booster = self.model.get_booster()
+            if hasattr(booster, 'num_features'):
+                return int(booster.num_features())
+        except Exception:
+            pass
+        return None
+
+    def _align_predictors_with_model(self, cols: List[str]) -> List[str]:
+        """Ensure predictors match model's training features, preserving order."""
+        if self.model_feature_names:
+            missing = [c for c in self.model_feature_names if c not in cols]
+            if missing:
+                raise ValueError(
+                    f'Model expects columns not present in provided data: {missing}'
+                )
+            return [c for c in self.model_feature_names if c in cols]
+
+        if self.model_n_features is not None and len(cols) != self.model_n_features:
+            raise ValueError(
+                f'Number of predictor columns ({len(cols)}) does not match model '
+                f'expectation ({self.model_n_features}).'
+            )
+        return cols
 
     def _psi_variables(self) -> List[str]:
         """Select variables to evaluate for PSI (exclude id/date/target)."""
