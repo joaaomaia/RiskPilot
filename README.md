@@ -23,7 +23,7 @@ Requisitos:
 - Python ≥ 3.9  
 - Bibliotecas:
   ```bash
-  pip install pandas numpy scikit-learn matplotlib seaborn
+  pip install pandas numpy scikit-learn matplotlib seaborn plotly kaleido
   ```
 
 ---
@@ -42,7 +42,8 @@ evaluator = BinaryPerformanceEvaluator(
     id_cols=["contract_id"],
     date_col="snapshot_date",     # opcional
     group_col="product_type",     # opcional
-    save_dir="resultados"         # opcional, salva gráficos como PNG
+    save_dir="resultados",        # opcional, salva gráficos como PNG
+    threshold=0.5                 # opcional
 )
 
 # Calcula métricas
@@ -74,6 +75,7 @@ print(evaluator.report)
 | `date_col` | `str` | (Opcional) Coluna de data para análises temporais |
 | `group_col` | `str` | (Opcional) Coluna categórica para agrupamentos |
 | `save_dir` | `str` / `Path` | (Opcional) Diretório para salvar gráficos PNG |
+| `threshold` | `float` | (Opcional) Probabilidade limite para classificação |
 
 ---
 
@@ -137,6 +139,7 @@ resultados/
 - numpy 1.26+
 - matplotlib 3.8+
 - seaborn 0.13+
+- plotly 5+
 
 ---
 
