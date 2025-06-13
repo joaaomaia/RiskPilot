@@ -26,6 +26,12 @@ Requisitos:
   pip install pandas numpy scikit-learn matplotlib seaborn plotly kaleido
   ```
 
+Opcionalmente, instale os ganchos de *pre-commit* para padronizar o código:
+
+```bash
+pre-commit install
+```
+
 ---
 
 ## 🚀 Exemplo Rápido
@@ -88,7 +94,9 @@ print(evaluator.report)
 - Brier Score
 
 ### 🧱 Matriz de Confusão
-- Gráfico Seaborn com cores em contraste
+- Gráfico Plotly com contraste automático de texto
+- Suporta threshold otimizado (``"ks"``/``"youden"``)
+- Pode gerar matrizes por grupo (``group_col``)
 - Mostra valores absolutos e percentuais
 
 ### 🎯 Curva de Calibração
@@ -100,6 +108,8 @@ print(evaluator.report)
 
 ### 🧪 PSI por Variável
 - PSI por variável ao longo do tempo (usando `date_col`)
+- Bins por quantis com base em dataset de referência
+- Tolerante a valores fora do intervalo e períodos com poucos dados
 - Indicação visual de faixas:
   - PSI ≤ 0.10 (aceitável)
   - PSI 0.10–0.25 (monitorar)
