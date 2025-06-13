@@ -40,7 +40,7 @@ from __future__ import annotations
 import warnings
 import pickle
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -48,6 +48,8 @@ import joblib
 import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.graph_objects as go
+from optbinning import OptimalBinning
+from decile_plot import decile_analysis_plot
 from sklearn.calibration import calibration_curve
 from sklearn.metrics import (
     matthews_corrcoef,
@@ -88,6 +90,8 @@ class BinaryPerformanceEvaluator:
         If provided, figures are saved to this directory in PNG format.
     threshold : float, default 0.5
         Probability cutoff used to convert scores into class labels.
+    homogeneous_group : str | int | pd.Series | np.ndarray | None, default "auto"
+        Strategy to create homogeneous groups. See :meth:`plot_group_radar`.
 
     Notes
     -----
@@ -111,6 +115,7 @@ class BinaryPerformanceEvaluator:
         group_col: Optional[str] = None,
         save_dir: Optional[Union[str, Path]] = None,
         threshold: float = 0.5,
+        homogeneous_group: Optional[Union[str, int, pd.Series, np.ndarray]] = "auto",
     ) -> None:
         self.model = self._load_model(model)
         self.df_train = df_train.copy()
@@ -121,6 +126,7 @@ class BinaryPerformanceEvaluator:
         self.date_col = date_col
         self.group_col = group_col
         self.threshold = threshold
+        self.homogeneous_group = homogeneous_group
 
         self.save_dir = Path(save_dir) if save_dir is not None else None
         if self.save_dir:
@@ -134,6 +140,14 @@ class BinaryPerformanceEvaluator:
         self.predictor_cols = self._align_predictors_with_model(self.predictor_cols)
         self._validate_predictors()
         self.report: Dict[str, Dict[str, float]] = {}
+        self.score_col_ = "y_pred_proba"
+        self.label_col_ = "y_pred_label"
+        self.group_col_ = "homogeneous_group"
+        self.group_: Dict[str, pd.Series] | None = None
+        self.binning_table_: Any | None = None
+
+        self._score_datasets()
+        self._assign_groups()
 
     ## ---------- public API ----------
     def compute_metrics(self) -> None:
@@ -145,7 +159,7 @@ class BinaryPerformanceEvaluator:
 
         for split_name, df in splits.items():
             y_true = df[self.target_col].values
-            y_pred_proba = self.model.predict_proba(df[self.predictor_cols])[:, 1]
+            y_pred_proba = df[self.score_col_].values
 
             metrics_dict = {
                 'MCC': matthews_corrcoef(y_true, (y_pred_proba >= self.threshold).astype(int)),
@@ -170,11 +184,13 @@ class BinaryPerformanceEvaluator:
 
         for ax, (title, df) in zip(axes, split_dfs.items()):
             y_true = df[self.target_col]
-            y_pred = (self.model.predict_proba(df[self.predictor_cols])[:, 1] >= self.threshold).astype(int)
+            y_pred = df[self.label_col_]
             cm = confusion_matrix(y_true, y_pred)
             cm_perc = cm / cm.sum()
 
             sns.heatmap(cm, annot=False, fmt='d', cmap='Blues', cbar=False, ax=ax)
+            ax.set_xticklabels(['0', '1'])
+            ax.set_yticklabels(['0', '1'], rotation=0)
 
             # annotate abs + %
             for i in range(cm.shape[0]):
@@ -201,7 +217,7 @@ class BinaryPerformanceEvaluator:
             plt.savefig(self.save_dir / 'confusion_matrices.png', dpi=200, bbox_inches='tight')
         plt.show()
 
-    def plot_calibration(self, *, n_bins: int = 10, save: bool = False, show: bool = True) -> go.Figure:
+    def plot_calibration(self, *, n_bins: int = 10, save: bool = False) -> go.Figure:
         """Reliability diagram for test split using Plotly."""
         self._validate_predictors()
         y_true = self.df_test[self.target_col].values
@@ -227,11 +243,9 @@ class BinaryPerformanceEvaluator:
 
         if save and self.save_dir:
             fig.write_image(str(self.save_dir / 'calibration_curve.png'))
-        if show:
-            fig.show()
         return fig
 
-    def plot_event_rate(self, *, save: bool = False, show: bool = True) -> go.Figure:
+    def plot_event_rate(self, *, save: bool = False) -> go.Figure:
         """Trend of event (target=1) rate over time by group using Plotly."""
         if self.date_col is None or self.group_col is None:
             raise ValueError('Both `date_col` and `group_col` are required for plot_event_rate().')
@@ -271,11 +285,9 @@ class BinaryPerformanceEvaluator:
         )
         if save and self.save_dir:
             fig.write_image(str(self.save_dir / 'event_rate.png'))
-        if show:
-            fig.show()
         return fig
 
-    def plot_psi(self, *, bins: int = 10, save: bool = False, show: bool = True) -> go.Figure:
+    def plot_psi(self, *, bins: int = 10, save: bool = False) -> go.Figure:
         """Compute & plot PSI per variable through time using Plotly."""
         if self.date_col is None:
             raise ValueError('`date_col` is required for plot_psi().')
@@ -342,11 +354,9 @@ class BinaryPerformanceEvaluator:
         )
         if save and self.save_dir:
             fig.write_image(str(self.save_dir / 'psi_over_time.png'))
-        if show:
-            fig.show()
         return fig
 
-    def plot_ks(self, *, save: bool = False, show: bool = True) -> go.Figure:
+    def plot_ks(self, *, save: bool = False) -> go.Figure:
         """KS statistic over time for each split using Plotly."""
         if self.date_col is None:
             raise ValueError('`date_col` is required for plot_ks().')
@@ -396,8 +406,74 @@ class BinaryPerformanceEvaluator:
         )
         if save and self.save_dir:
             fig.write_image(str(self.save_dir / 'ks_evolution.png'))
-        if show:
-            fig.show()
+        return fig
+
+    def plot_group_radar(
+        self,
+        features: List[str] | None = None,
+        *,
+        scaler: Literal["zscore", "minmax"] = "zscore",
+        save: bool = False,
+    ) -> go.Figure:
+        """Return radar chart of average feature values per homogeneous group."""
+        if self.group_ is None:
+            raise ValueError("Homogeneous groups were not computed.")
+
+        df = self.data_.copy()
+        if features is None:
+            numeric_predictors = [
+                c for c in self.predictor_cols if pd.api.types.is_numeric_dtype(df[c])
+            ]
+            features = numeric_predictors
+        if not features:
+            raise ValueError("No numeric features available for radar plot.")
+
+        if scaler == "zscore":
+            scaled = df[features].apply(lambda x: (x - x.mean()) / x.std(ddof=0))
+        else:
+            scaled = df[features].apply(lambda x: (x - x.min()) / (x.max() - x.min()))
+
+        mean_by_group = scaled.groupby(df[self.group_col_])[features].mean()
+
+        fig = go.Figure()
+        for group_id, row in mean_by_group.iterrows():
+            fig.add_trace(
+                go.Scatterpolar(
+                    r=row.values,
+                    theta=features,
+                    fill="toself",
+                    name=f"Group {group_id}",
+                )
+            )
+
+        fig.update_layout(template="plotly_white")
+        if save and self.save_dir:
+            fig.write_image(str(self.save_dir / "group_radar.png"))
+        return fig
+
+    def plot_decile_ks(
+        self,
+        *,
+        n_bins: int = 10,
+        ascending: bool = True,
+        group_id: int | None = None,
+        **kwargs: Any,
+    ) -> go.Figure:
+        """Wrapper around :func:`decile_analysis_plot` respecting groups."""
+        df = self.data_.copy()
+        if group_id is not None:
+            if self.group_ is None:
+                raise ValueError("Homogeneous groups were not computed.")
+            df = df[df[self.group_col_] == group_id]
+
+        fig, _, _ = decile_analysis_plot(
+            df,
+            score_col=self.score_col_,
+            target_col=self.target_col,
+            n_bins=n_bins,
+            ascending=ascending,
+            **kwargs,
+        )
         return fig
 
     ## ---------- helpers ----------
@@ -526,6 +602,91 @@ class BinaryPerformanceEvaluator:
             raise ValueError(
                 f'Model expects {self.model_n_features} features, got {len(self.predictor_cols)}'
             )
+
+    def _score_datasets(self) -> None:
+        """Add predicted probabilities and labels to each split."""
+        dfs = [('train', self.df_train), ('test', self.df_test)]
+        if self.df_val is not None:
+            dfs.append(('val', self.df_val))
+
+        for name, df in dfs:
+            proba = self.model.predict_proba(df[self.predictor_cols])[:, 1]
+            df[self.score_col_] = proba
+            df[self.label_col_] = (proba >= self.threshold).astype(int)
+            df['Split'] = name.capitalize()
+
+        self.data_ = pd.concat(
+            [self.df_train, self.df_test] + ([self.df_val] if self.df_val is not None else []),
+            axis=0,
+            ignore_index=True,
+        )
+
+    def _assign_groups(self) -> None:
+        """Create homogeneous groups according to ``self.homogeneous_group``."""
+        if self.homogeneous_group is None:
+            return
+
+        self.group_ = {}
+
+        if isinstance(self.homogeneous_group, str):
+            if self.homogeneous_group != 'auto':
+                raise ValueError("Unsupported string for homogeneous_group")
+
+            optb = OptimalBinning(
+                name='y_proba_train',
+                dtype='numerical',
+                solver='mip',
+                min_prebin_size=0.01,
+                max_n_bins=5,
+                min_bin_size=0.05,
+                monotonic_trend='ascending',
+            )
+            optb.fit(self.df_train[self.score_col_] * 1000, self.df_train[self.target_col])
+            self.binning_table_ = optb.binning_table.build()
+
+            for name, df in [('train', self.df_train), ('test', self.df_test), ('val', self.df_val)]:
+                if df is None:
+                    continue
+                labels = optb.transform(df[self.score_col_] * 1000, metric='bins')
+                df[self.group_col_] = labels
+                self.group_[name] = labels
+
+        elif isinstance(self.homogeneous_group, int):
+            n = int(self.homogeneous_group)
+            for name, df in [('train', self.df_train), ('test', self.df_test), ('val', self.df_val)]:
+                if df is None:
+                    continue
+                bins = pd.qcut(
+                    df[self.score_col_].rank(method='first'),
+                    q=n,
+                    labels=range(1, n + 1),
+                ).astype(int)
+                df[self.group_col_] = bins
+                self.group_[name] = bins
+            self.binning_table_ = None
+
+        else:
+            groups = pd.Series(self.homogeneous_group)
+            if len(groups) != len(self.data_):
+                raise ValueError('Length of provided group labels does not match data.')
+
+            self.data_[self.group_col_] = groups.reset_index(drop=True)
+            start = 0
+            for name, df in [('train', self.df_train), ('test', self.df_test), ('val', self.df_val)]:
+                if df is None:
+                    continue
+                end = start + len(df)
+                df[self.group_col_] = groups.iloc[start:end].values
+                self.group_[name] = df[self.group_col_]
+                start = end
+            self.binning_table_ = None
+
+        self.data_ = pd.concat(
+            [self.df_train, self.df_test] + ([self.df_val] if self.df_val is not None else []),
+            axis=0,
+            ignore_index=True,
+        )
+
 
     def _psi_variables(self) -> List[str]:
         """Select variables to evaluate for PSI (exclude id/date/target)."""
