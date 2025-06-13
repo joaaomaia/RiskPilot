@@ -121,15 +121,18 @@ class BinaryPerformanceEvaluator:
             self.save_dir.mkdir(parents=True, exist_ok=True)
 
         self._validate_data()
+        self._parse_date_col()
         self.predictor_cols = self._infer_predictors()
         self.model_feature_names = self._get_model_feature_names()
         self.model_n_features = self._get_model_n_features()
         self.predictor_cols = self._align_predictors_with_model(self.predictor_cols)
+        self._validate_predictors()
         self.report: Dict[str, Dict[str, float]] = {}
 
     ## ---------- public API ----------
     def compute_metrics(self) -> None:
         """Compute numeric metrics for train, test and (optional) validation."""
+        self._validate_predictors()
         splits = {'train': self.df_train, 'test': self.df_test}
         if self.df_val is not None:
             splits['val'] = self.df_val
@@ -152,6 +155,7 @@ class BinaryPerformanceEvaluator:
         """Plot confusion matrices (absolute + %)."""
         if not self.report:
             warnings.warn('compute_metrics() has not been called; metrics may be missing.')
+        self._validate_predictors()
 
         fig, axes = plt.subplots(1, 3 if self.df_val is not None else 2, figsize=(18, 5))
         split_dfs = {'Train': self.df_train, 'Test': self.df_test}
@@ -193,6 +197,7 @@ class BinaryPerformanceEvaluator:
 
     def plot_calibration(self, *, n_bins: int = 10, save: bool = False) -> None:
         """Reliability diagram for test split."""
+        self._validate_predictors()
         y_true = self.df_test[self.target_col].values
         y_pred_proba = self.model.predict_proba(self.df_test[self.predictor_cols])[:, 1]
         prob_true, prob_pred = calibration_curve(y_true, y_pred_proba, n_bins=n_bins, strategy='uniform')
@@ -255,8 +260,15 @@ class BinaryPerformanceEvaluator:
         psi_records = []
         baseline_df = self.df_train
         for var in self._psi_variables():
+            if not pd.api.types.is_numeric_dtype(baseline_df[var]):
+                continue
+
+            base_series = pd.to_numeric(baseline_df[var], errors="coerce").dropna()
+            if base_series.empty:
+                continue
+
             baseline_counts, _ = np.histogram(
-                baseline_df[var].dropna(), bins=bins, range=(baseline_df[var].min(), baseline_df[var].max())
+                base_series, bins=bins, range=(base_series.min(), base_series.max())
             )
             baseline_pct = baseline_counts / baseline_counts.sum()
 
@@ -264,9 +276,13 @@ class BinaryPerformanceEvaluator:
                 subset = self.df_test[date_series == period]
                 if subset.empty:
                     continue
-                counts, _ = np.histogram(
-                    subset[var].dropna(), bins=bins, range=(baseline_df[var].min(), baseline_df[var].max())
-                )
+                sub_series = pd.to_numeric(subset[var], errors="coerce").dropna()
+                if sub_series.empty:
+                    counts = np.zeros(bins)
+                else:
+                    counts, _ = np.histogram(
+                        sub_series, bins=bins, range=(base_series.min(), base_series.max())
+                    )
                 pct = counts / counts.sum() if counts.sum() > 0 else np.zeros_like(counts)
                 psi = np.where(
                     (baseline_pct > 0) & (pct > 0),
@@ -297,6 +313,7 @@ class BinaryPerformanceEvaluator:
         """KS statistic over time for each split."""
         if self.date_col is None:
             raise ValueError('`date_col` is required for plot_ks().')
+        self._validate_predictors()
 
         def ks_stat(y_true: np.ndarray, y_pred: np.ndarray) -> float:
             fpr, tpr, _ = roc_curve(y_true, y_pred)
@@ -367,6 +384,24 @@ class BinaryPerformanceEvaluator:
             if missing_ids:
                 raise KeyError(f'{name} missing id_cols: {missing_ids}')
 
+    def _parse_date_col(self) -> None:
+        """Parse `date_col` to datetime when format yyyymm is detected."""
+        if not self.date_col:
+            return
+
+        for df in [self.df_train, self.df_test, self.df_val]:
+            if df is None or self.date_col not in df.columns:
+                continue
+
+            col = df[self.date_col]
+            if pd.api.types.is_integer_dtype(col) or pd.api.types.is_float_dtype(col):
+                try:
+                    df[self.date_col] = pd.to_datetime(col.astype(int).astype(str), format="%Y%m")
+                    continue
+                except Exception:
+                    pass
+            df[self.date_col] = pd.to_datetime(col, errors="coerce")
+
     def _infer_predictors(self) -> List[str]:
         """Infer intersection of columns across all datasets, excluding id/date/group/target."""
         cols = set(self.df_train.columns)
@@ -426,10 +461,29 @@ class BinaryPerformanceEvaluator:
             )
         return cols
 
+    def _validate_predictors(self) -> None:
+        """Ensure predictor columns align with model expectations."""
+        for name, df in [('df_train', self.df_train), ('df_test', self.df_test), ('df_val', self.df_val)]:
+            if df is None:
+                continue
+            missing = [c for c in self.predictor_cols if c not in df.columns]
+            if missing:
+                raise KeyError(f'{name} missing predictor columns: {missing}')
+
+        if self.model_feature_names:
+            ordered = [c for c in self.model_feature_names if c in self.predictor_cols]
+            if ordered != self.predictor_cols:
+                self.predictor_cols = ordered
+        elif self.model_n_features is not None and len(self.predictor_cols) != self.model_n_features:
+            raise ValueError(
+                f'Model expects {self.model_n_features} features, got {len(self.predictor_cols)}'
+            )
+
     def _psi_variables(self) -> List[str]:
         """Select variables to evaluate for PSI (exclude id/date/target)."""
         exclude = set(self.id_cols + [self.target_col])
         if self.date_col:
             exclude.add(self.date_col)
         vars_ = [c for c in self.df_train.columns if c not in exclude]
-        return vars_
+        numeric_vars = [v for v in vars_ if pd.api.types.is_numeric_dtype(self.df_train[v])]
+        return numeric_vars
