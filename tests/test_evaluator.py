@@ -27,7 +27,9 @@ def _create_split():
 
 def test_auto_grouping():
     train, test = _create_split()
-    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
+    model = LogisticRegression().fit(
+        train[[f"f{i}" for i in range(5)]], train["target"]
+    )
 
     evaluator = BinaryPerformanceEvaluator(
         model=model,
@@ -47,7 +49,9 @@ def test_auto_grouping():
 
 def test_radar_plot_returns_figure():
     train, test = _create_split()
-    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
+    model = LogisticRegression().fit(
+        train[[f"f{i}" for i in range(5)]], train["target"]
+    )
 
     evaluator = BinaryPerformanceEvaluator(
         model=model,
@@ -65,7 +69,9 @@ def test_radar_plot_returns_figure():
 
 def test_decile_ks_wrapper():
     train, test = _create_split()
-    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
+    model = LogisticRegression().fit(
+        train[[f"f{i}" for i in range(5)]], train["target"]
+    )
 
     evaluator = BinaryPerformanceEvaluator(
         model=model,
@@ -84,7 +90,9 @@ def test_decile_ks_wrapper():
 
 def test_group_col_required_without_auto():
     train, test = _create_split()
-    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
+    model = LogisticRegression().fit(
+        train[[f"f{i}" for i in range(5)]], train["target"]
+    )
 
     with pytest.raises(ValueError):
         BinaryPerformanceEvaluator(
@@ -100,7 +108,9 @@ def test_group_col_required_without_auto():
 
 def test_event_rate_plot_with_auto_groups():
     train, test = _create_split()
-    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
+    model = LogisticRegression().fit(
+        train[[f"f{i}" for i in range(5)]], train["target"]
+    )
 
     evaluator = BinaryPerformanceEvaluator(
         model=model,
