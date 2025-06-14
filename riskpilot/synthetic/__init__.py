@@ -1,3 +1,3 @@
-from .synthetic_vintage_generator import SyntheticVintageGenerator
+from .synthetic_vintage_generator import LookAhead
 
-__all__ = ["SyntheticVintageGenerator"]
+__all__ = ["LookAhead"]

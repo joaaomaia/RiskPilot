@@ -19,7 +19,7 @@ class _VarMeta:
     values: Optional[np.ndarray] = None  # para PMF discreta
 
 
-class SyntheticVintageGenerator:
+class LookAhead:
     """Gera safras sintéticas de contratos de empréstimo para testes de stress-PD.
 
     Parameters
@@ -96,7 +96,7 @@ class SyntheticVintageGenerator:
     # ------------------------------------------------------------------
     # FIT
     # ------------------------------------------------------------------
-    def fit(self, df: pd.DataFrame) -> "SyntheticVintageGenerator":
+    def fit(self, df: pd.DataFrame) -> "LookAhead":
         """Learns marginal distributions and rank correlations from historical data."""
         self._order = [
             c

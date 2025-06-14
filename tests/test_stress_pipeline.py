@@ -6,7 +6,7 @@ from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
 
 from riskpilot.evaluation import BinaryPerformanceEvaluator
-from riskpilot.synthetic import SyntheticVintageGenerator
+from riskpilot.synthetic import LookAhead
 
 kaleido_available = find_spec("kaleido") is not None
 pytestmark = pytest.mark.skipif(not kaleido_available, reason="kaleido not installed")
@@ -22,7 +22,7 @@ def test_run_stress_pipeline(tmp_path):
     train = df.iloc[:80].reset_index(drop=True)
     test = df.iloc[80:].reset_index(drop=True)
 
-    gen = SyntheticVintageGenerator(id_cols=["id"], date_cols=["date"]).fit(train)
+    gen = LookAhead(id_cols=["id"], date_cols=["date"]).fit(train)
     model = LogisticRegression().fit(
         train[[f"f{i}" for i in range(4)]], train["target"]
     )
