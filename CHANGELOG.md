@@ -3,3 +3,5 @@
 - Packaged RiskPilot using pyproject.toml (PEP 621)
 - Integration of SyntheticVintageGenerator with BinaryPerformanceEvaluator
 - Stress testing pipeline
+### Fixed
+- Added missing `seaborn` dependency (CI failure #123)

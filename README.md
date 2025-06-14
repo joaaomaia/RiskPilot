@@ -25,6 +25,11 @@ pip install -e .[dev]
 pip install riskpilot
 ```
 
+```bash
+# Optional visualization
+pip install riskpilot[viz]
+```
+
 ---
 
 ## 🚀 Exemplo Rápido
