@@ -958,6 +958,8 @@ class BinaryPerformanceEvaluator:
             title=title or "KS Evolution over Time",
             xaxis_title="Period",
             yaxis_title="Kolmogorov–Smirnov",
+            xaxis=dict(showgrid=False),
+            yaxis=dict(showgrid=False),
             template="plotly_white",
         )
         if save and self.save_dir:
