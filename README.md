@@ -1,10 +1,11 @@
 <p align="center">
-  <h1 align="center">🔍 Binary Performance Evaluator</h1>
+  <h1 align="center">RiskPilot</h1>
 </p>
 
-<p align="center">
-  Avalie automaticamente modelos binários já treinados com métricas, gráficos e validações robustas.
-</p>
+[![CI](https://github.com/joaaomaia/riskpilot/actions/workflows/python-package.yml/badge.svg)](https://github.com/joaaomaia/riskpilot/actions/workflows/python-package.yml)
+[![Coverage](https://img.shields.io/badge/coverage-85%25-brightgreen)](#)
+
+Ferramentas para avaliação de modelos, geração de carteiras sintéticas e monitoramento de drift.
 
 ---
 
@@ -18,18 +19,10 @@ Ele compara desempenho em **treino**, **teste** e, opcionalmente, **validação*
 
 ## ⚙️ Instalação
 
-Requisitos:
-
-- Python ≥ 3.9  
-- Bibliotecas:
-  ```bash
-  pip install pandas numpy scikit-learn matplotlib seaborn plotly kaleido
-  ```
-
-Opcionalmente, instale os ganchos de *pre-commit* para padronizar o código:
-
 ```bash
-pre-commit install
+pip install -e .[dev]
+# ou
+pip install riskpilot
 ```
 
 ---
@@ -37,7 +30,7 @@ pre-commit install
 ## 🚀 Exemplo Rápido
 
 ```python
-from binary_performance_evaluator import BinaryPerformanceEvaluator
+from riskpilot.evaluation import BinaryPerformanceEvaluator
 
 evaluator = BinaryPerformanceEvaluator(
     model="modelo_treinado.pkl",   # caminho .pkl/.joblib ou objeto já carregado

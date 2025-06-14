@@ -3,7 +3,8 @@ import pandas as pd
 from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
 
-from binary_performance_evaluator import BinaryPerformanceEvaluator, _psi_single
+from riskpilot.evaluation import BinaryPerformanceEvaluator
+from riskpilot.evaluation.binary_performance_evaluator import _psi_single
 
 
 def test_psi_single_known_value():

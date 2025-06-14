@@ -1,0 +1,46 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "riskpilot"
+version = "0.3.0"
+description = "Tools for model evaluation, synthetic portfolio generation, and drift monitoring."
+authors = [
+  { name = "João Maia", email = "joao@example.com" }
+]
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+
+dependencies = [
+  "pandas>=2.2",
+  "numpy>=1.26",
+  "scikit-learn>=1.4",
+  "scipy>=1.12",
+  "plotly>=5.20",
+  "pyarrow>=15",
+  "tqdm>=4.66",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-cov>=4",
+  "pre-commit>=3",
+  "jupyterlab>=4",
+  "black>=24",
+  "isort>=5",
+  "ruff>=0.4",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["riskpilot"]
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

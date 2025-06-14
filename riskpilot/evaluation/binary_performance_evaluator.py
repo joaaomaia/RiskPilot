@@ -10,7 +10,7 @@ pandas, numpy, scikit‑learn, matplotlib, seaborn, plotly, kaleido
 
 Quick Example
 -------------
-from binary_performance_evaluator import BinaryPerformanceEvaluator
+from riskpilot.evaluation import BinaryPerformanceEvaluator
 
 evaluator = BinaryPerformanceEvaluator(
     model='modelo_treinado.pkl',
@@ -37,17 +37,19 @@ print(evaluator.report)           # full dict of results
 
 from __future__ import annotations
 
+import hashlib
+import logging
 import pickle
+import uuid
 import warnings
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
 import joblib
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import seaborn as sns
-from decile_plot import decile_analysis_plot
 from optbinning import OptimalBinning
 from sklearn.calibration import calibration_curve
 from sklearn.metrics import (
@@ -60,6 +62,9 @@ from sklearn.metrics import (
     roc_auc_score,
     roc_curve,
 )
+
+from ..synthetic import SyntheticVintageGenerator
+from .decile_plot import decile_analysis_plot
 
 sns.set(style="whitegrid")  # consistent style throughout
 
@@ -135,6 +140,15 @@ class BinaryPerformanceEvaluator:
         save_dir: Optional[Union[str, Path]] = None,
         threshold: float = 0.5,
         homogeneous_group: Optional[Union[str, int, pd.Series, np.ndarray]] = "auto",
+        synthetic_gen: SyntheticVintageGenerator | None = None,
+        stress_periods: int = 12,
+        stress_freq: str = "M",
+        stress_scenario: Literal["base", "stress"] = "stress",
+        stress_eval_funcs: Sequence[str] = (
+            "compute_metrics",
+            "plot_psi",
+            "plot_ks",
+        ),
     ) -> None:
         self.model = self._load_model(model)
         self.df_train = df_train.copy()
@@ -146,6 +160,11 @@ class BinaryPerformanceEvaluator:
         self.group_col = group_col
         self.threshold = threshold
         self.homogeneous_group = homogeneous_group
+        self.synthetic_gen = synthetic_gen
+        self.stress_periods = stress_periods
+        self.stress_freq = stress_freq
+        self.stress_scenario = stress_scenario
+        self.stress_eval_funcs = list(stress_eval_funcs)
 
         self.save_dir = Path(save_dir) if save_dir is not None else None
         if self.save_dir:
@@ -205,6 +224,55 @@ class BinaryPerformanceEvaluator:
             records.append({"Split": split_name.capitalize(), **metrics_dict})
 
         return pd.DataFrame(records).set_index("Split")
+
+    def run_stress_test(self) -> Dict[str, Any]:
+        """Generate synthetic vintages and evaluate stress metrics."""
+        if self.synthetic_gen is None:
+            raise ValueError("synthetic_gen is required for stress testing")
+
+        logger = logging.getLogger("riskpilot")
+        logger.info("Running stress test")
+
+        df_synth = self.synthetic_gen.generate(
+            n_periods=self.stress_periods,
+            freq=self.stress_freq,
+            scenario=self.stress_scenario,
+        )
+
+        run_id = uuid.uuid4().hex
+        art_dir = Path("artifacts") / run_id / "stress"
+        art_dir.mkdir(parents=True, exist_ok=True)
+        parquet_path = art_dir / "synthetic.parquet"
+        df_synth.to_parquet(parquet_path)
+
+        sha = hashlib.sha256(parquet_path.read_bytes()).hexdigest()
+
+        original_test = self.df_test
+        self.df_test = df_synth
+        self._score_datasets()
+        self._assign_groups()
+
+        results: Dict[str, Any] = {}
+        for name in self.stress_eval_funcs:
+            func = getattr(self, name)
+            out = func()
+            if isinstance(out, go.Figure):
+                fig_path = art_dir / f"{name}.png"
+                out.write_image(fig_path)
+                results[name] = str(fig_path)
+            else:
+                results[name] = out
+
+        self.df_test = original_test
+        self._score_datasets()
+        self._assign_groups()
+
+        self.report["stress"] = {
+            "metrics": results.get("compute_metrics"),
+            "figures": {k: v for k, v in results.items() if k != "compute_metrics"},
+            "meta": {"file": str(parquet_path), "sha256": sha},
+        }
+        return self.report["stress"]
 
     def binning_table(self) -> Any | None:
         """Return the binning table used for homogeneous groups."""
@@ -305,9 +373,9 @@ class BinaryPerformanceEvaluator:
         """Reliability diagram for test split using Plotly."""
         self._validate_predictors()
         y_true = self.df_test[self.target_col].values
-        y_pred_proba = self.model.predict_proba(
-            self.df_test[self.predictor_cols]
-        )[:, self._pos_class_idx]
+        y_pred_proba = self.model.predict_proba(self.df_test[self.predictor_cols])[
+            :, self._pos_class_idx
+        ]
         prob_true, prob_pred = calibration_curve(
             y_true,
             y_pred_proba,
@@ -590,7 +658,9 @@ class BinaryPerformanceEvaluator:
             df["Period"] = pd.to_datetime(df[self.date_col]).dt.to_period("M")
             for period, grp in df.groupby("Period"):
                 y_true = grp[self.target_col].values
-                y_pred = self.model.predict_proba(grp[self.predictor_cols])[:, self._pos_class_idx]
+                y_pred = self.model.predict_proba(grp[self.predictor_cols])[
+                    :, self._pos_class_idx
+                ]
                 ks = ks_stat(y_true, y_pred)
                 ks_records.append(
                     {"Split": split_name, "Period": period.to_timestamp(), "KS": ks}
@@ -662,9 +732,7 @@ class BinaryPerformanceEvaluator:
                     theta=features,
                     fill="toself",
                     name=f"Group {group_id}",
-                    line=dict(
-                        color=_rgba(self.group_palette_.get(group_id), 0.8)
-                    ),
+                    line=dict(color=_rgba(self.group_palette_.get(group_id), 0.8)),
                     fillcolor=_rgba(self.group_palette_.get(group_id), 0.3),
                 )
             )
@@ -869,7 +937,12 @@ class BinaryPerformanceEvaluator:
             dfs.append(("val", self.df_val))
 
         for name, df in dfs:
-            proba = 1 - self.model.predict_proba(df[self.predictor_cols])[:, self._pos_class_idx]
+            proba = (
+                1
+                - self.model.predict_proba(df[self.predictor_cols])[
+                    :, self._pos_class_idx
+                ]
+            )
             df[self.score_col_] = proba
             df[self.label_col_] = (proba >= self.threshold).astype(int)
             df["Split"] = name.capitalize()
