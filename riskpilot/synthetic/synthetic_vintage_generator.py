@@ -59,48 +59,48 @@ class SyntheticVintageGenerator:
     # FIT
     # ------------------------------------------------------------------
     def fit(self, df: pd.DataFrame) -> "SyntheticVintageGenerator":
-        """
-        Aprende o *shape* estatístico do dataframe histórico.
-
-        1. Detecta tipo de cada coluna (numérica contínua, discreta, categórica…)
-        2. Armazena QFs (quantile functions) ou PMFs.
-        3. Calcula correlação de postos (Spearman) para cópula gaussiana.
-        """
+        """Learns marginal distributions and rank correlations from historical data."""
         self._order = [
-            c
-            for c in df.columns
-            if c not in self.ignore_cols and c not in self.date_cols
+            c for c in df.columns if c not in self.ignore_cols and c not in self.date_cols
         ]
+
         for col in self._order:
-            s = df[col].dropna()
             if col in self.id_cols:
-                continue  # não gera, só cria novos IDs
+                continue
+            s = df[col].dropna()
+
             if col in self.date_cols:
                 self._meta[col] = _VarMeta("date")
             elif pd.api.types.is_bool_dtype(s):
                 self._meta[col] = _VarMeta("bool", values=s.values)
             elif pd.api.types.is_numeric_dtype(s):
-                uniq = np.unique(s)
+                uniq, counts = np.unique(s, return_counts=True)
                 if len(uniq) < 20:
+                    # *disc*: store unique values and their empirical counts (pmf)
                     self._meta[col] = _VarMeta(
-                        "disc", values=uniq, categories=np.bincount(s.astype(int))
+                        "disc",
+                        values=uniq,
+                        categories=counts.astype(float),
                     )
                 else:
                     qs = np.quantile(s, np.linspace(0, 1, 1001))
                     self._meta[col] = _VarMeta("cont", quantiles=qs)
-            else:  # categórico
+            else:
                 cats, counts = np.unique(s.astype(str), return_counts=True)
                 self._meta[col] = _VarMeta(
-                    "cat", categories=cats, values=counts / counts.sum()
+                    "cat",
+                    categories=cats,
+                    values=(counts / counts.sum()).astype(float),
                 )
 
-        # correlações (apenas variáveis geradas)
         cont_cols = [c for c, m in self._meta.items() if m.dtype in {"cont", "disc"}]
         if len(cont_cols) >= 2:
             rank_df = df[cont_cols].rank(method="average") / (len(df) + 1)
             self._corr = rank_df.corr(method="spearman").values
+
         self._fitted = True
         return self
+
 
     # ------------------------------------------------------------------
     # GERAÇÃO
@@ -200,23 +200,16 @@ class SyntheticVintageGenerator:
         return df_synth
 
     # ------------------------------------------------------------------
-    # AMOSTRAGEM DE UMA MARGINAL
+    # Sampling
     # ------------------------------------------------------------------
     def _sample_marginal(
-        self,
-        col: str,
-        meta: _VarMeta,
-        n: int,
-        scenario: str,
+        self, col: str, meta: _VarMeta, n: int, scenario: str
     ) -> np.ndarray:
-        """Retorna vetor sintético seguindo regra de ruído."""
         cust = self.custom_noise.get(col)
         if cust is not None:
-            func   = cust["func"]
-            kwargs = dict(cust.get("kwargs", {}))  # cópia p/ não mutar input
-            # garanta que 'size' não colida
-            if "size" not in kwargs:
-                kwargs["size"] = n
+            func: Callable = cust["func"]
+            kwargs = dict(cust.get("kwargs", {}))
+            kwargs.setdefault("size", n)
             return func(**kwargs)
 
         if meta.dtype == "cont":
@@ -229,8 +222,13 @@ class SyntheticVintageGenerator:
 
         if meta.dtype == "disc":
             probs = meta.categories / meta.categories.sum()
+            if len(probs) != len(meta.values):
+                raise ValueError(
+                    f"Length mismatch for disc variable '{col}':"
+                    f" len(values)={len(meta.values)} len(categories)={len(probs)}"
+                )
             synt = self.random_state.choice(meta.values, size=n, p=probs)
-            jitter = self.random_state.poisson(1, size=n) - 1  # média 0
+            jitter = self.random_state.poisson(1, size=n) - 1
             if scenario == "stress":
                 jitter *= 2
             return np.maximum(0, synt + jitter)
@@ -238,7 +236,6 @@ class SyntheticVintageGenerator:
         if meta.dtype == "cat":
             synt = self.random_state.choice(meta.categories, size=n, p=meta.values)
             if scenario == "stress":
-                # amplifica menor categoria
                 min_idx = np.argmin(meta.values)
                 flip_mask = self.random_state.rand(n) < 0.05
                 synt[flip_mask] = meta.categories[min_idx]
@@ -251,11 +248,10 @@ class SyntheticVintageGenerator:
             return np.where(flips, ~base, base)
 
         if meta.dtype == "date":
-            # usa distribuição de delays históricas (dias entre data_col e vint_date)
             delays = self.random_state.choice(np.arange(-30, 31), size=n)
             return pd.to_datetime(vint_date) + pd.to_timedelta(delays, unit="D")
 
-        raise ValueError(f"Tipo desconhecido para {col}")
+        raise ValueError(f"Unknown dtype '{meta.dtype}' for column '{col}'.")
 
     # ------------------------------------------------------------------
     # CÓPULA GAUSSIANA
