@@ -690,153 +690,6 @@ class BinaryPerformanceEvaluator:
         return fig_rate, fig_share
 
 
-    # def plot_event_rate(
-    #     self,
-    #     *,
-    #     save: bool = False,
-    #     title: str = "",
-    # ) -> tuple[go.Figure, go.Figure]:
-    #     """
-    #     Gera dois gráficos Plotly:
-    #     1. Bad-Rate por GH ao longo do tempo
-    #     2. Participação de GHs ao longo do tempo
-    #     Hover inclui Safra, Volume e Intervalo; gridlines removidos.
-    #     """
-
-    #     import pandas as pd
-    #     import numpy as np
-    #     import plotly.graph_objects as go
-
-    #     # ---------- validações ----------
-    #     if self.date_col is None:
-    #         raise ValueError("`date_col` is required for plot_event_rate().")
-
-    #     group_col = next(
-    #         (c for c in [self.group_col, self.group_col_] if c and c in self.data_.columns),
-    #         None,
-    #     )
-    #     if group_col is None:
-    #         raise ValueError("Group column not found for plot_event_rate().")
-
-    #     # ---------- dataset único ----------
-    #     df_all = pd.concat(
-    #         [
-    #             self.df_train.assign(Split="Train"),
-    #             self.df_test.assign(Split="Test"),
-    #             *([self.df_val.assign(Split="Val")] if self.df_val is not None else []),
-    #         ],
-    #         axis=0,
-    #     )
-    #     df_all[self.date_col] = pd.to_datetime(df_all[self.date_col])
-
-    #     # ---------- ordenação GH por Bad-Rate ----------
-    #     br_order = (
-    #         df_all.groupby(group_col)[self.target_col].mean()
-    #         .sort_values(ascending=False)
-    #     )  # maior BR primeiro
-    #     gh_label = {g: f"GH{idx+1}" for idx, g in enumerate(br_order.index)}
-
-    #     # ---------- tabelas ----------
-    #     groups_sorted = list(br_order.index)
-
-    #     pivot_br = (
-    #         df_all.groupby([self.date_col, group_col])[self.target_col]
-    #         .mean()
-    #         .unstack(group_col)
-    #         .reindex(columns=groups_sorted)
-    #         .sort_index()
-    #     )
-
-    #     counts = (
-    #         df_all.groupby([self.date_col, group_col])
-    #         .size()
-    #         .unstack(group_col)
-    #         .reindex(columns=groups_sorted, fill_value=0)
-    #         .sort_index()
-    #     )
-    #     pct = counts.div(counts.sum(axis=1), axis=0)
-
-    #     # ---------- cores ----------
-    #     self._compute_group_palette()
-    #     colors = self.group_palette_ or {}
-
-    #     # ---------- figura Bad-Rate ----------
-    #     fig_rate = go.Figure()
-    #     for g in groups_sorted:
-    #         periods = pivot_br.index.strftime("%Y%m")
-    #         volumes_fmt = counts[g].apply(lambda v: f"{v:,}".replace(",", "."))
-    #         custom = np.stack([periods, volumes_fmt], axis=-1)
-
-    #         fig_rate.add_trace(
-    #             go.Scatter(
-    #                 x=pivot_br.index,
-    #                 y=pivot_br[g],
-    #                 mode="lines+markers",
-    #                 name=gh_label[g],
-    #                 line=dict(color=colors.get(g)),
-    #                 marker=dict(color=colors.get(g)),
-    #                 customdata=custom,
-    #                 hovertemplate=(
-    #                     "Safra: %{customdata[0]}<br>"
-    #                     "KS: %{y:.4f}<extra></extra>"
-    #                 ).replace("KS", "Bad Rate")  # manter formatação
-    #                 .replace(
-    #                     "<extra></extra>",
-    #                     "<br>Volume: %{customdata[1]}<br>Intervalo: " + str(g) + "<extra></extra>",
-    #                 ),
-    #             )
-    #         )
-    #     fig_rate.update_layout(
-    #         title=title or "Bad Rate por GH",
-    #         yaxis_title="Bad Rate",
-    #         xaxis_title="Safra",
-    #         template="plotly_white",
-    #         xaxis_showgrid=False,
-    #         yaxis_showgrid=False,
-    #         legend_title="Grupos Homogêneos",
-    #     )
-
-    #     # ---------- figura Participação ----------
-    #     fig_share = go.Figure()
-    #     for g in groups_sorted:
-    #         fig_share.add_trace(
-    #             go.Bar(
-    #                 x=pct.index,
-    #                 y=pct[g],
-    #                 name=gh_label[g],
-    #                 marker=dict(color=colors.get(g)),
-    #                 hovertemplate=(
-    #                     "Safra: %{x|%Y%m}<br>"
-    #                     "Participação: %{y:.1%}<br>"
-    #                     "Volume: %{customdata:,}"
-    #                     "<br>Intervalo: " + str(g) + "<extra></extra>"
-    #                 ),
-    #                 customdata=counts[g],
-    #             )
-    #         )
-    #     fig_share.update_layout(
-    #         barmode="stack",
-    #         title="Participação dos GHs",
-    #         yaxis_title="Participação",
-    #         yaxis_tickformat=".0%",
-    #         xaxis_title="Safra",
-    #         template="plotly_white",
-    #         xaxis_showgrid=False,
-    #         yaxis_showgrid=False,
-    #         legend_title="Grupos Homogêneos",
-    #     )
-
-    #     # ---------- salvar opcional ----------
-    #     if save and self.save_dir:
-    #         fig_rate.write_image(self.save_dir / "event_rate.png")
-    #         fig_share.write_image(self.save_dir / "group_share.png")
-
-    #     fig_rate.show()
-    #     fig_share.show()
-
-    #     return
-
-
     def plot_psi(
         self,
         *,
@@ -847,35 +700,30 @@ class BinaryPerformanceEvaluator:
         reference_last_period: bool = False,
         save: bool = False,
         title: str = "",
-    ) -> tuple[go.Figure, pd.DataFrame]:
-        """Compute and plot PSI per variable through time using Plotly.
+        feature: Optional[str] = None,
+        smart_view: bool = False,
+        psi_threshold: float = 0.10,   # usado quando smart_view=True
+    ) -> Union[
+        tuple[go.Figure, pd.DataFrame],               # quando feature != None
+        tuple[Dict[str, go.Figure], pd.DataFrame],    # quando feature == None
+    ]:
+        """
+        PSI por variável ao longo do tempo.
 
         Parameters
         ----------
-        reference_df : pd.DataFrame, optional
-            Dataset used as reference for binning. Defaults to ``df_train``.
-        bin_strategy : dict, optional
-            ``{"type": "quantile", "n_bins": 10}`` or ``{"type": "fixed"}``.
-        min_obs : int, default 100
-            Minimum observations required per period to compute PSI.
-        eps : float, default 1e-9
-            Small constant added to counts to avoid zeros.
-        reference_last_period : bool, default False
-            If ``True`` each cohort is compared with the immediately
-            preceding one. When ``False`` the reference is ``df_train``
-            or ``reference_df`` if provided.
-            Periods with fewer than ``min_obs`` records are skipped. Adjust
-            ``min_obs`` (e.g. ``min_obs=1``) if you have short time windows.
-        save : bool, default False
-            If ``True`` and ``save_dir`` is set, image is written to disk.
-
-        Returns
-        -------
-        go.Figure, pd.DataFrame
-            Figure with PSI evolution and DataFrame with the computed values
-            (columns: ``Variable``, ``Period``, ``PSI``, ``Split``,
-            ``reference_type``).
+        feature : str | None
+            • None  → gera um gráfico para **cada** variável.  
+            • "var" → gera gráfico só para essa variável.
+        smart_view : bool, default False
+            Se True, inclui somente variáveis cujo PSI >= `psi_threshold`
+            em pelo menos um split / período.
         """
+
+        import warnings
+        import numpy as np
+        import pandas as pd
+        import plotly.graph_objects as go
 
         if self.date_col is None:
             raise ValueError("`date_col` is required for plot_psi().")
@@ -883,14 +731,7 @@ class BinaryPerformanceEvaluator:
         reference_df = reference_df if reference_df is not None else self.df_train
         bin_strategy = bin_strategy or {"type": "quantile", "n_bins": 10}
 
-        splits = [
-            ("Train", self.df_train),
-            ("Test", self.df_test),
-            *([("Val", self.df_val)] if self.df_val is not None else []),
-        ]
-
-        psi_records: List[Dict[str, Any]] = []
-
+        # ------------- helper p/ edges -----------------
         def _get_edges(series: pd.Series) -> np.ndarray:
             ser = pd.to_numeric(series, errors="coerce").dropna()
             if ser.empty:
@@ -898,169 +739,370 @@ class BinaryPerformanceEvaluator:
             if bin_strategy.get("type") == "quantile":
                 try:
                     _, edges = pd.qcut(
-                        ser,
-                        q=bin_strategy.get("n_bins", 10),
-                        retbins=True,
-                        duplicates="drop",
+                        ser, q=bin_strategy.get("n_bins", 10),
+                        retbins=True, duplicates="drop"
                     )
                 except ValueError:
                     edges = np.linspace(
-                        ser.min(),
-                        ser.max(),
+                        ser.min(), ser.max(),
                         bin_strategy.get("n_bins", 10) + 1,
                     )
             else:
                 edges = np.linspace(
-                    ser.min(),
-                    ser.max(),
+                    ser.min(), ser.max(),
                     bin_strategy.get("n_bins", 10) + 1,
                 )
             edges[0] = min(edges[0], ser.min())
             edges[-1] = max(edges[-1], ser.max())
             return edges
 
-        if reference_last_period:
-            for split_name, df in splits:
-                df = df.copy()
-                df["Period"] = pd.to_datetime(df[self.date_col]).dt.to_period("M")
-                periods = sorted(df["Period"].unique())
-                for idx in range(1, len(periods)):
-                    cur_period = periods[idx]
-                    ref_period = periods[idx - 1]
+        # ------------- splits --------------------------
+        splits = [
+            ("Train", self.df_train),
+            ("Test", self.df_test),
+            *([("Val", self.df_val)] if self.df_val is not None else []),
+        ]
 
-                    cur_df = df[df["Period"] == cur_period]
-                    ref_df = df[df["Period"] == ref_period]
+        psi_records: List[Dict[str, Any]] = []
+        variables = [feature] if feature else self._psi_variables()
 
-                    if len(cur_df) < min_obs or len(ref_df) < min_obs:
+        # -------- global_edges (referência train) ------
+        global_edges: Dict[str, np.ndarray] = {}
+        for var in variables:
+            edges = _get_edges(reference_df[var])
+            if edges.size > 0:
+                global_edges[var] = edges
+
+        for split_name, df in splits:
+            periods = (
+                pd.to_datetime(df[self.date_col]).dt.to_period("M")
+                .sort_values()
+                .unique()
+            )
+            for var in variables:
+                edges = global_edges.get(var)
+                if edges is None:
+                    continue
+                ref_series = pd.to_numeric(reference_df[var], errors="coerce").dropna()
+                counts_ref = np.histogram(ref_series, bins=edges)[0].astype(float) + eps
+                p_ref = counts_ref / counts_ref.sum()
+
+                for period in periods:
+                    subset = df[pd.to_datetime(df[self.date_col]).dt.to_period("M") == period]
+                    if len(subset) < min_obs:
+                        continue
+                    ser = pd.to_numeric(subset[var], errors="coerce").dropna()
+                    if ser.empty:
                         continue
 
-                    for var in self._psi_variables():
-                        ref_series = ref_df[var]
-                        ser = cur_df[var]
-                        edges = _get_edges(ref_series)
-                        if edges.size == 0:
-                            continue
+                    edges_adj = edges.copy()
+                    if ser.min() < edges_adj[0]:
+                        edges_adj[0] = ser.min()
+                    if ser.max() > edges_adj[-1]:
+                        edges_adj[-1] = ser.max()
 
-                        counts_ref = (
-                            np.histogram(ref_series, bins=edges)[0].astype(float) + eps
-                        )
-                        p_ref = counts_ref / counts_ref.sum()
-
-                        edges_adj = edges.copy()
-                        ser_num = pd.to_numeric(ser, errors="coerce").dropna()
-                        if ser_num.empty:
-                            continue
-                        if ser_num.min() < edges_adj[0]:
-                            edges_adj[0] = ser_num.min()
-                        if ser_num.max() > edges_adj[-1]:
-                            edges_adj[-1] = ser_num.max()
-
-                        counts_test = (
-                            np.histogram(ser_num, bins=edges_adj)[0].astype(float) + eps
-                        )
-                        p_test = counts_test / counts_test.sum()
-
-                        psi = _psi_single(p_ref, p_test)
-                        psi_records.append(
-                            {
-                                "Variable": var,
-                                "Period": cur_period.to_timestamp(),
-                                "PSI": psi,
-                                "Split": split_name,
-                                "reference_type": "last_period",
-                            }
-                        )
-        else:
-            global_edges: Dict[str, np.ndarray] = {}
-            for var in self._psi_variables():
-                edges = _get_edges(reference_df[var])
-                if edges.size == 0:
-                    continue
-                global_edges[var] = edges
-            for split_name, df in splits:
-                periods = (
-                    pd.to_datetime(df[self.date_col])
-                    .dt.to_period("M")
-                    .sort_values()
-                    .unique()
-                )
-                for var, edges in global_edges.items():
-                    ref_series = pd.to_numeric(
-                        reference_df[var], errors="coerce"
-                    ).dropna()
-                    counts_ref = (
-                        np.histogram(ref_series, bins=edges)[0].astype(float) + eps
+                    counts_test = (
+                        np.histogram(ser, bins=edges_adj)[0].astype(float) + eps
                     )
-                    p_ref = counts_ref / counts_ref.sum()
-                    for period in periods:
-                        subset = df[
-                            pd.to_datetime(df[self.date_col]).dt.to_period("M")
-                            == period
-                        ]
-                        if len(subset) < min_obs:
-                            continue
-                        ser = pd.to_numeric(subset[var], errors="coerce").dropna()
-                        if ser.empty:
-                            continue
-                        edges_adj = edges.copy()
-                        if ser.min() < edges_adj[0]:
-                            edges_adj[0] = ser.min()
-                        if ser.max() > edges_adj[-1]:
-                            edges_adj[-1] = ser.max()
+                    p_test = counts_test / counts_test.sum()
+                    psi_val = _psi_single(p_ref, p_test)
 
-                        counts_test = (
-                            np.histogram(ser, bins=edges_adj)[0].astype(float) + eps
-                        )
-                        p_test = counts_test / counts_test.sum()
-                        psi = _psi_single(p_ref, p_test)
-                        psi_records.append(
-                            {
-                                "Variable": var,
-                                "Period": period.to_timestamp(),
-                                "PSI": psi,
-                                "Split": split_name,
-                                "reference_type": "train_global",
-                            }
-                        )
+                    psi_records.append(
+                        {
+                            "Variable": var,
+                            "Period": period.to_timestamp(),
+                            "PSI": psi_val,
+                            "Split": split_name,
+                        }
+                    )
 
         psi_df = pd.DataFrame(psi_records)
         if psi_df.empty:
             warnings.warn("PSI could not be computed (insufficient data).")
             return go.Figure(), psi_df
 
-        fig = go.Figure()
-        for (var, split), grp in psi_df.groupby(["Variable", "Split"]):
-            name = f"{var} ({split})" if split else str(var)
-            fig.add_trace(
-                go.Scatter(
-                    x=grp["Period"],
-                    y=grp["PSI"],
-                    mode="lines+markers",
-                    name=name,
-                )
+        # -------- smart_view --------------------------
+        if smart_view and feature is None:
+            keep_vars = (
+                psi_df.groupby("Variable")["PSI"]
+                .max()
+                .loc[lambda s: s >= psi_threshold]
+                .index
             )
+            psi_df = psi_df[psi_df["Variable"].isin(keep_vars)]
 
-        fig.add_hline(
-            y=0.1,
-            line=dict(color="orange", dash="dash"),
-            annotation_text="0.10",
-        )
-        fig.add_hline(
-            y=0.25,
-            line=dict(color="red", dash="dash"),
-            annotation_text="0.25",
-        )
-        fig.update_layout(
-            title=title or "PSI over Time by Variable",
-            xaxis_title="Safra",
-            yaxis_title="PSI",
-            template="plotly_white",
-        )
-        if save and self.save_dir:
-            fig.write_image(str(self.save_dir / "psi_over_time.png"))
+        # ------------- retorno: 1 figura por variável --------------
+        figures: Dict[str, go.Figure] = {}
+        for var, grp_var in psi_df.groupby("Variable"):
+            fig = go.Figure()
+            for split, grp_split in grp_var.groupby("Split"):
+                fig.add_trace(
+                    go.Scatter(
+                        x=grp_split["Period"],
+                        y=grp_split["PSI"],
+                        mode="lines+markers",
+                        name=split,
+                    )
+                )
+            # linhas-limite discretas
+            for yline, color in [(0.10, "gray"), (0.25, "gray")]:
+                fig.add_hline(
+                    y=yline,
+                    line=dict(color=color, dash="dash", width=1),
+                    opacity=0.4,                                 # 👈 fora do dict line
+                    annotation_text=f"{yline:.2f}",
+                    annotation_position="top right",
+                    annotation_font_color=color,
+                )
+
+
+            fig.update_layout(
+                title=(title or f"PSI ao longo do tempo – {var}"),
+                xaxis_title="Safra",
+                yaxis_title="PSI",
+                template="plotly_white",
+                xaxis_showgrid=False,
+                yaxis_showgrid=False,
+                yaxis_tickformat=".2f",
+            )
+            figures[var] = fig
+
+            if save and self.save_dir:
+                safe_var = var.replace("/", "_")
+                fig.write_image(self.save_dir / f"psi_{safe_var}.png")
+
+        # ------------- casos de retorno -----------------
+        if feature:
+            # retorna único gráfico + DataFrame filtrado
+            return figures[feature], psi_df[psi_df["Variable"] == feature]
+        else:
+            # retorna dict<variable, figure> + DataFrame completo/filtrado
+            return figures, psi_df
+
+    # def plot_psi(
+    #     self,
+    #     *,
+    #     reference_df: Optional[pd.DataFrame] = None,
+    #     bin_strategy: Optional[Dict[str, Any]] = None,
+    #     min_obs: int = 100,
+    #     eps: float = 1e-9,
+    #     reference_last_period: bool = False,
+    #     save: bool = False,
+    #     title: str = "",
+    # ) -> tuple[go.Figure, pd.DataFrame]:
+    #     """Compute and plot PSI per variable through time using Plotly.
+
+    #     Parameters
+    #     ----------
+    #     reference_df : pd.DataFrame, optional
+    #         Dataset used as reference for binning. Defaults to ``df_train``.
+    #     bin_strategy : dict, optional
+    #         ``{"type": "quantile", "n_bins": 10}`` or ``{"type": "fixed"}``.
+    #     min_obs : int, default 100
+    #         Minimum observations required per period to compute PSI.
+    #     eps : float, default 1e-9
+    #         Small constant added to counts to avoid zeros.
+    #     reference_last_period : bool, default False
+    #         If ``True`` each cohort is compared with the immediately
+    #         preceding one. When ``False`` the reference is ``df_train``
+    #         or ``reference_df`` if provided.
+    #         Periods with fewer than ``min_obs`` records are skipped. Adjust
+    #         ``min_obs`` (e.g. ``min_obs=1``) if you have short time windows.
+    #     save : bool, default False
+    #         If ``True`` and ``save_dir`` is set, image is written to disk.
+
+    #     Returns
+    #     -------
+    #     go.Figure, pd.DataFrame
+    #         Figure with PSI evolution and DataFrame with the computed values
+    #         (columns: ``Variable``, ``Period``, ``PSI``, ``Split``,
+    #         ``reference_type``).
+    #     """
+
+    #     if self.date_col is None:
+    #         raise ValueError("`date_col` is required for plot_psi().")
+
+    #     reference_df = reference_df if reference_df is not None else self.df_train
+    #     bin_strategy = bin_strategy or {"type": "quantile", "n_bins": 10}
+
+    #     splits = [
+    #         ("Train", self.df_train),
+    #         ("Test", self.df_test),
+    #         *([("Val", self.df_val)] if self.df_val is not None else []),
+    #     ]
+
+    #     psi_records: List[Dict[str, Any]] = []
+
+    #     def _get_edges(series: pd.Series) -> np.ndarray:
+    #         ser = pd.to_numeric(series, errors="coerce").dropna()
+    #         if ser.empty:
+    #             return np.array([])
+    #         if bin_strategy.get("type") == "quantile":
+    #             try:
+    #                 _, edges = pd.qcut(
+    #                     ser,
+    #                     q=bin_strategy.get("n_bins", 10),
+    #                     retbins=True,
+    #                     duplicates="drop",
+    #                 )
+    #             except ValueError:
+    #                 edges = np.linspace(
+    #                     ser.min(),
+    #                     ser.max(),
+    #                     bin_strategy.get("n_bins", 10) + 1,
+    #                 )
+    #         else:
+    #             edges = np.linspace(
+    #                 ser.min(),
+    #                 ser.max(),
+    #                 bin_strategy.get("n_bins", 10) + 1,
+    #             )
+    #         edges[0] = min(edges[0], ser.min())
+    #         edges[-1] = max(edges[-1], ser.max())
+    #         return edges
+
+    #     if reference_last_period:
+    #         for split_name, df in splits:
+    #             df = df.copy()
+    #             df["Period"] = pd.to_datetime(df[self.date_col]).dt.to_period("M")
+    #             periods = sorted(df["Period"].unique())
+    #             for idx in range(1, len(periods)):
+    #                 cur_period = periods[idx]
+    #                 ref_period = periods[idx - 1]
+
+    #                 cur_df = df[df["Period"] == cur_period]
+    #                 ref_df = df[df["Period"] == ref_period]
+
+    #                 if len(cur_df) < min_obs or len(ref_df) < min_obs:
+    #                     continue
+
+    #                 for var in self._psi_variables():
+    #                     ref_series = ref_df[var]
+    #                     ser = cur_df[var]
+    #                     edges = _get_edges(ref_series)
+    #                     if edges.size == 0:
+    #                         continue
+
+    #                     counts_ref = (
+    #                         np.histogram(ref_series, bins=edges)[0].astype(float) + eps
+    #                     )
+    #                     p_ref = counts_ref / counts_ref.sum()
+
+    #                     edges_adj = edges.copy()
+    #                     ser_num = pd.to_numeric(ser, errors="coerce").dropna()
+    #                     if ser_num.empty:
+    #                         continue
+    #                     if ser_num.min() < edges_adj[0]:
+    #                         edges_adj[0] = ser_num.min()
+    #                     if ser_num.max() > edges_adj[-1]:
+    #                         edges_adj[-1] = ser_num.max()
+
+    #                     counts_test = (
+    #                         np.histogram(ser_num, bins=edges_adj)[0].astype(float) + eps
+    #                     )
+    #                     p_test = counts_test / counts_test.sum()
+
+    #                     psi = _psi_single(p_ref, p_test)
+    #                     psi_records.append(
+    #                         {
+    #                             "Variable": var,
+    #                             "Period": cur_period.to_timestamp(),
+    #                             "PSI": psi,
+    #                             "Split": split_name,
+    #                             "reference_type": "last_period",
+    #                         }
+    #                     )
+    #     else:
+    #         global_edges: Dict[str, np.ndarray] = {}
+    #         for var in self._psi_variables():
+    #             edges = _get_edges(reference_df[var])
+    #             if edges.size == 0:
+    #                 continue
+    #             global_edges[var] = edges
+    #         for split_name, df in splits:
+    #             periods = (
+    #                 pd.to_datetime(df[self.date_col])
+    #                 .dt.to_period("M")
+    #                 .sort_values()
+    #                 .unique()
+    #             )
+    #             for var, edges in global_edges.items():
+    #                 ref_series = pd.to_numeric(
+    #                     reference_df[var], errors="coerce"
+    #                 ).dropna()
+    #                 counts_ref = (
+    #                     np.histogram(ref_series, bins=edges)[0].astype(float) + eps
+    #                 )
+    #                 p_ref = counts_ref / counts_ref.sum()
+    #                 for period in periods:
+    #                     subset = df[
+    #                         pd.to_datetime(df[self.date_col]).dt.to_period("M")
+    #                         == period
+    #                     ]
+    #                     if len(subset) < min_obs:
+    #                         continue
+    #                     ser = pd.to_numeric(subset[var], errors="coerce").dropna()
+    #                     if ser.empty:
+    #                         continue
+    #                     edges_adj = edges.copy()
+    #                     if ser.min() < edges_adj[0]:
+    #                         edges_adj[0] = ser.min()
+    #                     if ser.max() > edges_adj[-1]:
+    #                         edges_adj[-1] = ser.max()
+
+    #                     counts_test = (
+    #                         np.histogram(ser, bins=edges_adj)[0].astype(float) + eps
+    #                     )
+    #                     p_test = counts_test / counts_test.sum()
+    #                     psi = _psi_single(p_ref, p_test)
+    #                     psi_records.append(
+    #                         {
+    #                             "Variable": var,
+    #                             "Period": period.to_timestamp(),
+    #                             "PSI": psi,
+    #                             "Split": split_name,
+    #                             "reference_type": "train_global",
+    #                         }
+    #                     )
+
+    #     psi_df = pd.DataFrame(psi_records)
+    #     if psi_df.empty:
+    #         warnings.warn("PSI could not be computed (insufficient data).")
+    #         return go.Figure(), psi_df
+
+    #     fig = go.Figure()
+    #     for (var, split), grp in psi_df.groupby(["Variable", "Split"]):
+    #         name = f"{var} ({split})" if split else str(var)
+    #         fig.add_trace(
+    #             go.Scatter(
+    #                 x=grp["Period"],
+    #                 y=grp["PSI"],
+    #                 mode="lines+markers",
+    #                 name=name,
+    #             )
+    #         )
+
+    #     fig.add_hline(
+    #         y=0.1,
+    #         line=dict(color="orange", dash="dash"),
+    #         annotation_text="0.10",
+    #     )
+    #     fig.add_hline(
+    #         y=0.25,
+    #         line=dict(color="red", dash="dash"),
+    #         annotation_text="0.25",
+    #     )
+    #     fig.update_layout(
+    #         title=title or "PSI over Time by Variable",
+    #         xaxis_title="Safra",
+    #         yaxis_title="PSI",
+    #         template="plotly_white",
+    #     )
+    #     if save and self.save_dir:
+    #         fig.write_image(str(self.save_dir / "psi_over_time.png"))
         
-        #fig.show()
-        return fig, psi_df
+    #     #fig.show()
+    #     return fig, psi_df
 
     def plot_ks(
         self,
