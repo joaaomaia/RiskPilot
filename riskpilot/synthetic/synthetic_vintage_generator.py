@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 import warnings
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -32,18 +32,23 @@ class SyntheticVintageGenerator:
         ignore_cols: Optional[Sequence[str]] = None,
         random_state: int | None = None,
         custom_noise: Optional[Dict[str, Dict[str, Any]]] = None,
+        unclear_date_strategy: str = "start",
     ):
         self.id_cols = set(id_cols)
         self.date_cols = set(date_cols)
         self._date_cols = list(date_cols)
         self._date_has_time: Dict[str, bool] = {}
         self._max_dates: Dict[str, pd.Timestamp] = {}
+        self._date_month_alignment: Dict[str, str] = {}
         self._has_time_component = False
         self._max_date = pd.Timestamp.min
         self.keep_cols = set(keep_cols or [])
         self.ignore_cols = set(ignore_cols or [])
         self.random_state = np.random.RandomState(random_state)
         self.custom_noise = custom_noise or {}
+        if unclear_date_strategy not in {"start", "end"}:
+            raise ValueError("unclear_date_strategy must be 'start' or 'end'")
+        self.unclear_date_strategy = unclear_date_strategy
 
         self._meta: Dict[str, _VarMeta] = {}
         self._corr: Optional[np.ndarray] = None
@@ -66,7 +71,9 @@ class SyntheticVintageGenerator:
     def fit(self, df: pd.DataFrame) -> "SyntheticVintageGenerator":
         """Learns marginal distributions and rank correlations from historical data."""
         self._order = [
-            c for c in df.columns if c not in self.ignore_cols and c not in self.date_cols
+            c
+            for c in df.columns
+            if c not in self.ignore_cols and c not in self.date_cols
         ]
 
         for col in self._date_cols:
@@ -74,6 +81,14 @@ class SyntheticVintageGenerator:
             self._date_has_time[col] = (ser.dt.floor("s") != ser.dt.normalize()).any()
             if not ser.empty:
                 self._max_dates[col] = ser.max()
+                start_p = ser.dt.is_month_start.mean()
+                end_p = ser.dt.is_month_end.mean()
+                if max(start_p, end_p) < 0.6:
+                    self._date_month_alignment[col] = self.unclear_date_strategy
+                else:
+                    self._date_month_alignment[col] = (
+                        "start" if start_p >= end_p else "end"
+                    )
         if self._date_cols:
             self._has_time_component = self._date_has_time[self._date_cols[0]]
             self._max_date = self._max_dates.get(self._date_cols[0], pd.Timestamp.min)
@@ -114,7 +129,6 @@ class SyntheticVintageGenerator:
 
         self._fitted = True
         return self
-
 
     # ------------------------------------------------------------------
     # GERAÇÃO
@@ -201,12 +215,20 @@ class SyntheticVintageGenerator:
             normalize=not self._has_time_component,
         )
         if len(expected) != len(vint_dates):
-            raise ValueError("Generated dates are not continuous with the given frequency")
+            raise ValueError(
+                "Generated dates are not continuous with the given frequency"
+            )
 
         for vint in vint_dates:
             n_rows = n_per_vintage or self.random_state.choice([500, 1000, 2000])
             df_v = self._generate_one_vintage(
-                n_rows, vint, scenario, shocks, preserve_corr, date_offsets
+                n_rows,
+                vint,
+                scenario,
+                shocks,
+                preserve_corr,
+                date_offsets,
+                offset,
             )
             df_list.append(df_v)
 
@@ -223,6 +245,7 @@ class SyntheticVintageGenerator:
         shocks: Dict[str, Dict[str, Any]],
         preserve_corr: bool,
         date_offsets: Optional[Dict[str, Any]],
+        freq_offset: pd.DateOffset,
     ) -> pd.DataFrame:
         # 1. gera base vazia
         data = {}
@@ -232,6 +255,45 @@ class SyntheticVintageGenerator:
             col_date = vint_date
             if date_offsets and col in date_offsets:
                 col_date = col_date + self._normalize_freq(date_offsets[col])
+            align = self._date_month_alignment.get(col, self.unclear_date_strategy)
+            if isinstance(
+                freq_offset,
+                (
+                    offsets.MonthBegin,
+                    offsets.MonthEnd,
+                    offsets.BusinessMonthBegin,
+                    offsets.BusinessMonthEnd,
+                    offsets.QuarterBegin,
+                    offsets.QuarterEnd,
+                    offsets.BQuarterBegin,
+                    offsets.BQuarterEnd,
+                    offsets.YearBegin,
+                    offsets.YearEnd,
+                    offsets.BYearBegin,
+                    offsets.BYearEnd,
+                ),
+            ):
+                if align == "start":
+                    col_date = pd.Timestamp(
+                        col_date.year,
+                        col_date.month,
+                        1,
+                        col_date.hour,
+                        col_date.minute,
+                        col_date.second,
+                        col_date.microsecond,
+                        tzinfo=col_date.tzinfo,
+                    )
+                elif align == "end":
+                    base = pd.Timestamp(col_date.year, col_date.month, 1)
+                    base += pd.offsets.MonthEnd(1)
+                    col_date = base.replace(
+                        hour=col_date.hour,
+                        minute=col_date.minute,
+                        second=col_date.second,
+                        microsecond=col_date.microsecond,
+                        tzinfo=col_date.tzinfo,
+                    )
             if not self._date_has_time.get(col, True):
                 col_date = pd.to_datetime(col_date).normalize()
             data[col] = np.full(n_rows, col_date)
@@ -307,10 +369,6 @@ class SyntheticVintageGenerator:
             base = self.random_state.choice(meta.values, size=n)
             flips = self.random_state.rand(n) < flip_p
             return np.where(flips, ~base, base)
-
-        if meta.dtype == "date":
-            delays = self.random_state.choice(np.arange(-30, 31), size=n)
-            return pd.to_datetime(vint_date) + pd.to_timedelta(delays, unit="D")
 
         raise ValueError(f"Unknown dtype '{meta.dtype}' for column '{col}'.")
 
