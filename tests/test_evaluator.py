@@ -1,16 +1,11 @@
-import os
-import sys
-
-import pandas as pd
 import numpy as np
-from sklearn.datasets import make_classification
-from sklearn.linear_model import LogisticRegression
+import pandas as pd
 import plotly.graph_objects as go
 import pytest
+from sklearn.datasets import make_classification
+from sklearn.linear_model import LogisticRegression
 
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-
-from binary_performance_evaluator import BinaryPerformanceEvaluator
+from riskpilot.evaluation import BinaryPerformanceEvaluator
 
 
 def _create_split():
