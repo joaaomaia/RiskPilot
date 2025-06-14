@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
@@ -20,8 +20,14 @@ class _VarMeta:
 
 
 class SyntheticVintageGenerator:
-    """
-    Gera safras sintéticas de contratos de empréstimo para testes de stress-PD.
+    """Gera safras sintéticas de contratos de empréstimo para testes de stress-PD.
+
+    Parameters
+    ----------
+    id_cols : Sequence[str]
+        Colunas que identificam cada linha.
+    date_cols : Sequence[str]
+        Colunas de data. Aceita ``datetime`` ou inteiros ``yyyymm``/``yyyymmdd``.
     """
 
     def __init__(
@@ -33,6 +39,7 @@ class SyntheticVintageGenerator:
         random_state: int | None = None,
         custom_noise: Optional[Dict[str, Dict[str, Any]]] = None,
         unclear_date_strategy: str = "start",
+        int_date_format: Optional[Dict[str, str]] = None,
     ):
         self.id_cols = set(id_cols)
         self.date_cols = set(date_cols)
@@ -49,6 +56,9 @@ class SyntheticVintageGenerator:
         if unclear_date_strategy not in {"start", "end"}:
             raise ValueError("unclear_date_strategy must be 'start' or 'end'")
         self.unclear_date_strategy = unclear_date_strategy
+        self.int_date_format = int_date_format or {}
+        self._date_int_format: Dict[str, str] = {}
+        self._date_int_dtype: Dict[str, Any] = {}
 
         self._meta: Dict[str, _VarMeta] = {}
         self._corr: Optional[np.ndarray] = None
@@ -65,6 +75,24 @@ class SyntheticVintageGenerator:
                 return offsets.BusinessMonthEnd()
         return frequencies.to_offset(freq)
 
+    def _parse_intlike_dates(
+        self, series: pd.Series
+    ) -> Tuple[pd.DatetimeIndex, Optional[str]]:
+        """Detect and parse integer-like date columns."""
+        if series.empty:
+            return pd.to_datetime(series), None
+        if (
+            pd.api.types.is_integer_dtype(series) or series.dtype == "object"
+        ) and series.astype(str).str.isdigit().all():
+            s = series.astype(str)
+            parsed = pd.to_datetime(s, format="%Y%m", errors="coerce")
+            if not parsed.isna().any():
+                return parsed, "yyyymm"
+            parsed = pd.to_datetime(s, format="%Y%m%d", errors="coerce")
+            if not parsed.isna().any():
+                return parsed, "yyyymmdd"
+        return pd.to_datetime(series), None
+
     # ------------------------------------------------------------------
     # FIT
     # ------------------------------------------------------------------
@@ -77,7 +105,21 @@ class SyntheticVintageGenerator:
         ]
 
         for col in self._date_cols:
-            ser = pd.to_datetime(df[col].dropna())
+            raw = df[col].dropna()
+            fmt_hint = self.int_date_format.get(col)
+            if fmt_hint == "yyyymm":
+                ser = pd.to_datetime(raw.astype(str), format="%Y%m")
+                self._date_int_format[col] = "yyyymm"
+                self._date_int_dtype[col] = df[col].dtype
+            elif fmt_hint == "yyyymmdd":
+                ser = pd.to_datetime(raw.astype(str), format="%Y%m%d")
+                self._date_int_format[col] = "yyyymmdd"
+                self._date_int_dtype[col] = df[col].dtype
+            else:
+                ser, detected = self._parse_intlike_dates(raw)
+                if detected:
+                    self._date_int_format[col] = detected
+                    self._date_int_dtype[col] = df[col].dtype
             self._date_has_time[col] = (ser.dt.floor("s") != ser.dt.normalize()).any()
             if not ser.empty:
                 self._max_dates[col] = ser.max()
@@ -140,6 +182,7 @@ class SyntheticVintageGenerator:
         start_vintage: str | pd.Timestamp | None = None,
         end_vintage: str | pd.Timestamp | None = None,
         align_with_history: bool = True,
+        skip_train_overlap: bool = True,
         scenario: str = "base",
         shocks: Optional[Dict[str, Dict[str, Any]]] = None,
         n_per_vintage: Optional[int] = None,
@@ -162,6 +205,8 @@ class SyntheticVintageGenerator:
             Data final desejada; sobrescreve ``n_periods`` se fornecida.
         align_with_history : bool, default True
             Garante continuidade temporal usando a última data observada.
+        skip_train_overlap : bool, default True
+            Evita sobreposição com o histórico ajustando ``start_vintage``.
         scenario : {"base", "stress"}
             Controla intensidade do ruído.
         shocks : dict, opcional
@@ -187,6 +232,53 @@ class SyntheticVintageGenerator:
             start_vintage = pd.to_datetime(self._max_date) + offset
             if not self._has_time_component:
                 start_vintage = start_vintage.normalize()
+            if skip_train_overlap:
+                candidate = start_vintage
+                align = self._date_month_alignment.get(
+                    self._date_cols[0], self.unclear_date_strategy
+                )
+                if isinstance(
+                    offset,
+                    (
+                        offsets.MonthBegin,
+                        offsets.MonthEnd,
+                        offsets.BusinessMonthBegin,
+                        offsets.BusinessMonthEnd,
+                        offsets.QuarterBegin,
+                        offsets.QuarterEnd,
+                        offsets.BQuarterBegin,
+                        offsets.BQuarterEnd,
+                        offsets.YearBegin,
+                        offsets.YearEnd,
+                        offsets.BYearBegin,
+                        offsets.BYearEnd,
+                    ),
+                ):
+                    if align == "start":
+                        candidate = pd.Timestamp(
+                            candidate.year,
+                            candidate.month,
+                            1,
+                            candidate.hour,
+                            candidate.minute,
+                            candidate.second,
+                            candidate.microsecond,
+                            tzinfo=candidate.tzinfo,
+                        )
+                    elif align == "end":
+                        base = pd.Timestamp(candidate.year, candidate.month, 1)
+                        base += pd.offsets.MonthEnd(1)
+                        candidate = base.replace(
+                            hour=candidate.hour,
+                            minute=candidate.minute,
+                            second=candidate.second,
+                            microsecond=candidate.microsecond,
+                            tzinfo=candidate.tzinfo,
+                        )
+                if not self._has_time_component:
+                    candidate = pd.to_datetime(candidate).normalize()
+                if candidate <= self._max_date:
+                    start_vintage += offset
         else:
             start_vintage = pd.Timestamp.today().normalize() + offset
 
@@ -319,6 +411,19 @@ class SyntheticVintageGenerator:
         for col in self.keep_cols:
             if col not in df_synth.columns:
                 df_synth[col] = np.nan
+
+        for col, fmt in self._date_int_format.items():
+            if col in df_synth.columns:
+                if fmt == "yyyymm":
+                    df_synth[col] = (
+                        df_synth[col].dt.year * 100 + df_synth[col].dt.month
+                    ).astype(self._date_int_dtype[col])
+                elif fmt == "yyyymmdd":
+                    df_synth[col] = (
+                        df_synth[col].dt.year * 10000
+                        + df_synth[col].dt.month * 100
+                        + df_synth[col].dt.day
+                    ).astype(self._date_int_dtype[col])
 
         return df_synth
 
