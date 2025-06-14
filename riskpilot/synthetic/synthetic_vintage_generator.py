@@ -212,7 +212,12 @@ class SyntheticVintageGenerator:
         """Retorna vetor sintético seguindo regra de ruído."""
         cust = self.custom_noise.get(col)
         if cust is not None:
-            return cust["func"](n, **cust.get("kwargs", {}))
+            func   = cust["func"]
+            kwargs = dict(cust.get("kwargs", {}))  # cópia p/ não mutar input
+            # garanta que 'size' não colida
+            if "size" not in kwargs:
+                kwargs["size"] = n
+            return func(**kwargs)
 
         if meta.dtype == "cont":
             u = self.random_state.uniform(0, 1, size=n)
