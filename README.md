@@ -57,7 +57,7 @@ metrics = evaluator.compute_metrics()
 evaluator.plot_confusion(save=True)
 evaluator.plot_calibration()
 evaluator.plot_event_rate()
-evaluator.plot_psi()
+evaluator.plot_psi(reference_last_period=True)
 evaluator.plot_ks()
 
 # Visualizar resultados numéricos
@@ -109,6 +109,7 @@ print(metrics)
 ### 🧪 PSI por Variável
 - PSI por variável ao longo do tempo (usando `date_col`)
 - Bins por quantis com base em dataset de referência
+- Possibilidade de usar o período imediatamente anterior como referência
 - Tolerante a valores fora do intervalo e períodos com poucos dados
 - Indicação visual de faixas:
   - PSI ≤ 0.10 (aceitável)
