@@ -1,10 +1,17 @@
-import numpy as np
+from importlib.util import find_spec
+
 import pandas as pd
+import plotly.graph_objects as go
+import pytest
 from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
-import plotly.graph_objects as go
 
 from riskpilot.evaluation import BinaryPerformanceEvaluator
+
+optbinning_available = find_spec("optbinning") is not None
+skip_if_no_optbinning = pytest.mark.skipif(
+    not optbinning_available, reason="optbinning not installed"
+)
 
 
 def _split():
@@ -24,6 +31,7 @@ def _split():
     return train, test
 
 
+@skip_if_no_optbinning
 def test_seaborn_plots_smoke():
     train, test = _split()
     model = LogisticRegression().fit(train[["a", "b", "c"]], train["target"])

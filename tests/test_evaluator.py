@@ -1,3 +1,5 @@
+from importlib.util import find_spec
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -6,6 +8,11 @@ from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
 
 from riskpilot.evaluation import BinaryPerformanceEvaluator
+
+optbinning_available = find_spec("optbinning") is not None
+skip_if_no_optbinning = pytest.mark.skipif(
+    not optbinning_available, reason="optbinning not installed"
+)
 
 
 def _create_split():
@@ -20,6 +27,7 @@ def _create_split():
     return train, test
 
 
+@skip_if_no_optbinning
 def test_auto_grouping():
     train, test = _create_split()
     model = LogisticRegression().fit(
@@ -101,6 +109,7 @@ def test_group_col_required_without_auto():
         )
 
 
+@skip_if_no_optbinning
 def test_event_rate_plot_with_auto_groups():
     train, test = _create_split()
     model = LogisticRegression().fit(
@@ -122,6 +131,7 @@ def test_event_rate_plot_with_auto_groups():
     assert all(isinstance(f, go.Figure) for f in figs)
 
 
+@skip_if_no_optbinning
 def test_binning_table_method():
     train, test = _create_split()
     model = LogisticRegression().fit(

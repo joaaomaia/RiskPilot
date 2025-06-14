@@ -22,10 +22,12 @@ dependencies = [
   "pyarrow>=15",
   "tqdm>=4.66",
   "seaborn>=0.13",
+  "optbinning>=0.16",
 ]
 
 [project.optional-dependencies]
 viz = ["seaborn>=0.13"]
+binning = ["optbinning>=0.16"]
 dev = [
   "pytest>=8",
   "pytest-cov>=4",

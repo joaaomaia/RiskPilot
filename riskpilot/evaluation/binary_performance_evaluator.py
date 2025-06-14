@@ -50,7 +50,15 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import seaborn as sns
-from optbinning import OptimalBinning
+
+try:
+    from optbinning import OptimalBinning
+except ImportError:  # pragma: no cover - optional dependency
+    OptimalBinning = None  # type: ignore[assignment]
+    logging.warning(
+        "Optional dependency 'optbinning' is missing. "
+        "Install with `pip install riskpilot[binning]`."
+    )
 from sklearn.calibration import calibration_curve
 from sklearn.metrics import (
     average_precision_score,
@@ -964,6 +972,12 @@ class BinaryPerformanceEvaluator:
         if isinstance(self.homogeneous_group, str):
             if self.homogeneous_group != "auto":
                 raise ValueError("Unsupported string for homogeneous_group")
+
+            if OptimalBinning is None:
+                raise ImportError(
+                    "OptimalBinning is required for `homogeneous_group='auto'`. "
+                    "Install with `pip install riskpilot[binning]`."
+                )
 
             optb = OptimalBinning(
                 name="y_proba_train",
