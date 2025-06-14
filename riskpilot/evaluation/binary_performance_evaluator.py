@@ -71,7 +71,7 @@ from sklearn.metrics import (
     roc_curve,
 )
 
-from ..synthetic import SyntheticVintageGenerator
+from ..synthetic import LookAhead
 from .decile_plot import decile_analysis_plot
 
 sns.set(style="whitegrid")  # consistent style throughout
@@ -148,7 +148,7 @@ class BinaryPerformanceEvaluator:
         save_dir: Optional[Union[str, Path]] = None,
         threshold: float = 0.5,
         homogeneous_group: Optional[Union[str, int, pd.Series, np.ndarray]] = "auto",
-        synthetic_gen: SyntheticVintageGenerator | None = None,
+        synthetic_gen: LookAhead | None = None,
         stress_periods: int = 12,
         stress_freq: str = "M",
         stress_scenario: Literal["base", "stress"] = "stress",

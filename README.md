@@ -147,12 +147,12 @@ resultados/
 
 ---
 
-## Synthetic Vintage Generator
+## LookAhead Generator
 
 ```python
-from riskpilot.synthetic import SyntheticVintageGenerator
+from riskpilot.synthetic import LookAhead
 
-gen = SyntheticVintageGenerator(
+gen = LookAhead(
     id_cols=["contract_id"],
     date_cols=["snapshot_date"],
     random_state=42,
