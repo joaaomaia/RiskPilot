@@ -61,3 +61,22 @@ def test_date_alignment_end():
     gen = SyntheticVintageGenerator(id_cols=["id"], date_cols=["date"]).fit(df)
     synth = gen.generate(n_periods=2, freq="M", n_per_vintage=1)
     assert synth["date"].dt.is_month_end.all()
+
+
+def test_int_yyyymm_roundtrip():
+    df = pd.DataFrame({"id": [1, 2, 3], "date": [202401, 202402, 202403]})
+    orig_dtype = df["date"].dtype
+    gen = SyntheticVintageGenerator(id_cols=["id"], date_cols=["date"])
+    gen.fit(df)
+    synth = gen.generate(n_periods=1, freq="M", n_per_vintage=1)
+    assert synth["date"].dtype == orig_dtype
+    assert (synth["date"] > df["date"].max()).all()
+
+
+def test_no_overlap_with_history():
+    df = pd.DataFrame(
+        {"id": range(3), "date": pd.date_range("2022-01-01", periods=3, freq="MS")}
+    )
+    gen = SyntheticVintageGenerator(id_cols=["id"], date_cols=["date"]).fit(df)
+    synth = gen.generate(n_periods=1, freq="M", n_per_vintage=1)
+    assert synth["date"].min() > df["date"].max()
