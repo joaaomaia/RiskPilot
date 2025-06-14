@@ -7,15 +7,16 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 import pandas as pd
+from pandas.tseries import frequencies, offsets
 from scipy import stats
 
 
 @dataclass
 class _VarMeta:
-    dtype: str                    # 'cont', 'disc', 'cat', 'bool', 'date'
+    dtype: str  # 'cont', 'disc', 'cat', 'bool', 'date'
     categories: Optional[np.ndarray] = None
     quantiles: Optional[np.ndarray] = None
-    values: Optional[np.ndarray] = None    # para PMF discreta
+    values: Optional[np.ndarray] = None  # para PMF discreta
 
 
 class SyntheticVintageGenerator:
@@ -44,6 +45,16 @@ class SyntheticVintageGenerator:
         self._order: List[str] = []
         self._fitted = False
 
+    def _normalize_freq(self, freq: str | pd.DateOffset) -> pd.DateOffset:
+        """Normaliza frequências legadas para evitar avisos futuros."""
+        if isinstance(freq, str):
+            f = freq.upper()
+            if f == "M":
+                return offsets.MonthEnd()
+            if f == "BM":
+                return offsets.BusinessMonthEnd()
+        return frequencies.to_offset(freq)
+
     # ------------------------------------------------------------------
     # FIT
     # ------------------------------------------------------------------
@@ -55,8 +66,11 @@ class SyntheticVintageGenerator:
         2. Armazena QFs (quantile functions) ou PMFs.
         3. Calcula correlação de postos (Spearman) para cópula gaussiana.
         """
-        self._order = [c for c in df.columns
-                       if c not in self.ignore_cols and c not in self.date_cols]
+        self._order = [
+            c
+            for c in df.columns
+            if c not in self.ignore_cols and c not in self.date_cols
+        ]
         for col in self._order:
             s = df[col].dropna()
             if col in self.id_cols:
@@ -68,15 +82,17 @@ class SyntheticVintageGenerator:
             elif pd.api.types.is_numeric_dtype(s):
                 uniq = np.unique(s)
                 if len(uniq) < 20:
-                    self._meta[col] = _VarMeta("disc", values=uniq,
-                                               categories=np.bincount(s.astype(int)))
+                    self._meta[col] = _VarMeta(
+                        "disc", values=uniq, categories=np.bincount(s.astype(int))
+                    )
                 else:
                     qs = np.quantile(s, np.linspace(0, 1, 1001))
                     self._meta[col] = _VarMeta("cont", quantiles=qs)
             else:  # categórico
                 cats, counts = np.unique(s.astype(str), return_counts=True)
-                self._meta[col] = _VarMeta("cat", categories=cats,
-                                           values=counts / counts.sum())
+                self._meta[col] = _VarMeta(
+                    "cat", categories=cats, values=counts / counts.sum()
+                )
 
         # correlações (apenas variáveis geradas)
         cont_cols = [c for c, m in self._meta.items() if m.dtype in {"cont", "disc"}]
@@ -125,15 +141,18 @@ class SyntheticVintageGenerator:
         shocks = shocks or {}
         df_list: List[pd.DataFrame] = []
 
+        offset = self._normalize_freq(freq)
+
         # tabela de datas-safra
         if start_vintage is None:
-            start_vintage = pd.Timestamp.today().normalize() + pd.tseries.frequencies.to_offset(freq)
-        vint_dates = pd.date_range(start=start_vintage, periods=n_periods, freq=freq)
+            start_vintage = pd.Timestamp.today().normalize() + offset
+        vint_dates = pd.date_range(start=start_vintage, periods=n_periods, freq=offset)
 
         for vint in vint_dates:
             n_rows = n_per_vintage or self.random_state.choice([500, 1000, 2000])
-            df_v = self._generate_one_vintage(n_rows, vint, scenario,
-                                              shocks, preserve_corr)
+            df_v = self._generate_one_vintage(
+                n_rows, vint, scenario, shocks, preserve_corr
+            )
             df_list.append(df_v)
 
         return pd.concat(df_list, ignore_index=True)
@@ -255,9 +274,9 @@ class SyntheticVintageGenerator:
         for j, col in enumerate(cols):
             meta = self._meta[col]
             if meta.dtype == "cont":
-                df_new[col] = np.interp(u[:, j],
-                                        np.linspace(0, 1, len(meta.quantiles)),
-                                        meta.quantiles)
+                df_new[col] = np.interp(
+                    u[:, j], np.linspace(0, 1, len(meta.quantiles)), meta.quantiles
+                )
             else:  # disc
                 bins = np.cumsum(meta.categories) / meta.categories.sum()
                 df_new[col] = np.searchsorted(bins, u[:, j])
