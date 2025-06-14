@@ -1,0 +1,11 @@
+# Força todos os arquivos de texto a usarem LF (Unix)
+* text=auto eol=lf
+
+# Trata notebooks Jupyter como arquivos binários (evita diffs longos)
+*.ipynb binary
+
+# Opcional: trata arquivos CSV como texto com LF
+*.csv text eol=lf
+
+# Opcional: arquivos Python com LF
+*.py text eol=lf

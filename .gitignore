@@ -16,5 +16,6 @@ __pycache__/
 # Output images
 *.png
 
-
+prompts/
+notes/
 notes.txt

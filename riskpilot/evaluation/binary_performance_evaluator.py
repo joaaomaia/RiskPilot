@@ -804,27 +804,39 @@ class BinaryPerformanceEvaluator:
         self._compute_group_palette()
 
         df = self.data_.copy()
+        # Seleção de features
         if features is None:
             numeric_predictors = [
-                c for c in self.predictor_cols if pd.api.types.is_numeric_dtype(df[c])
+                c for c in self.predictor_cols 
+                if pd.api.types.is_numeric_dtype(df[c])
             ]
             features = numeric_predictors
         if not features:
             raise ValueError("No numeric features available for radar plot.")
 
+        # Escalonamento
         if scaler == "zscore":
             scaled = df[features].apply(lambda x: (x - x.mean()) / x.std(ddof=0))
         else:
             scaled = df[features].apply(lambda x: (x - x.min()) / (x.max() - x.min()))
 
+        # Média por grupo
         mean_by_group = scaled.groupby(df[self.group_col_])[features].mean()
 
+        # Preparação do gráfico
         fig = go.Figure()
         for group_id, row in mean_by_group.iterrows():
+            # Lista original de thetas e valores
+            theta = features.copy()
+            r = row.values.tolist()
+            # Fecha o polígono repetindo o primeiro ponto
+            theta.append(theta[0])
+            r.append(r[0])
+
             fig.add_trace(
                 go.Scatterpolar(
-                    r=row.values,
-                    theta=features,
+                    r=r,
+                    theta=theta,
                     fill="toself",
                     name=f"Group {group_id}",
                     line=dict(color=_rgba(self.group_palette_.get(group_id), 0.8)),
@@ -832,14 +844,24 @@ class BinaryPerformanceEvaluator:
                 )
             )
 
+        # Layout: oculta eixo radial e configura template
         fig.update_layout(
             template="plotly_white",
             title=title or "Group Radar",
-            polar=dict(radialaxis=dict(showticklabels=False)),
+            polar=dict(
+                radialaxis=dict(
+                    visible=False
+                )
+            ),
+            showlegend=True
         )
+
+        # Salvamento opcional
         if save and self.save_dir:
             fig.write_image(str(self.save_dir / "group_radar.png"))
+
         return fig
+
 
     def plot_decile_ks(
         self,
