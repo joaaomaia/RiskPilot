@@ -550,60 +550,32 @@ class BinaryPerformanceEvaluator:
         return fig
 
 
-
-    # def plot_calibration(
-    #     self, *, n_bins: int = 10, save: bool = False, title: str = ""
-    # ) -> go.Figure:
-    #     """Reliability diagram for test split using Plotly."""
-    #     self._validate_predictors()
-    #     y_true = self.df_test[self.target_col].values
-    #     y_pred_proba = self.model.predict_proba(self.df_test[self.predictor_cols])[
-    #         :, self._pos_class_idx
-    #     ]
-    #     prob_true, prob_pred = calibration_curve(
-    #         y_true,
-    #         y_pred_proba,
-    #         n_bins=n_bins,
-    #         strategy="uniform",
-    #     )
-
-    #     brier = brier_score_loss(y_true, y_pred_proba)
-
-    #     fig = go.Figure()
-    #     fig.add_trace(
-    #         go.Scatter(x=prob_pred, y=prob_true, mode="lines+markers", name="Model")
-    #     )
-    #     fig.add_trace(
-    #         go.Scatter(
-    #             x=[0, 1], y=[0, 1], mode="lines", line=dict(dash="dash"), name="Ideal"
-    #         )
-    #     )
-    #     fig.update_layout(
-    #         title=title or f"Calibration Curve – Test (Brier = {brier:.4f})",
-    #         xaxis_title="Predicted probability",
-    #         yaxis_title="Observed frequency",
-    #         template="plotly_white",
-    #     )
-
-    #     if save and self.save_dir:
-    #         fig.write_image(str(self.save_dir / "calibration_curve.png"))
-    #     return fig
-
     def plot_event_rate(
-        self, *, save: bool = False, title: str = ""
+        self,
+        *,
+        save: bool = False,
+        title: str = "",
     ) -> tuple[go.Figure, go.Figure]:
-        """Return two figures with event rate and group share over time."""
+        """
+        1) Bad-Rate por GH (hover unified)
+        2) Participação de GHs (stacked bar)
+        """
+        import pandas as pd
+        import numpy as np
+        import plotly.graph_objects as go
+
+        # ---------- validações ----------
         if self.date_col is None:
             raise ValueError("`date_col` is required for plot_event_rate().")
 
-        group_col = None
-        for cand in [self.group_col, self.group_col_]:
-            if cand and cand in self.data_.columns:
-                group_col = cand
-                break
+        group_col = next(
+            (c for c in [self.group_col, self.group_col_] if c and c in self.data_.columns),
+            None,
+        )
         if group_col is None:
             raise ValueError("Group column not found for plot_event_rate().")
 
+        # ---------- dataset ----------
         df_all = pd.concat(
             [
                 self.df_train.assign(Split="Train"),
@@ -614,73 +586,256 @@ class BinaryPerformanceEvaluator:
         )
         df_all[self.date_col] = pd.to_datetime(df_all[self.date_col])
 
-        groups = sorted(df_all[group_col].unique())
+        # ---------- GH ordem por Bad-Rate ----------
+        br_order = (
+            df_all.groupby(group_col)[self.target_col].mean()
+            .sort_values(ascending=False)
+        )
+        gh_label = {g: f"GH{idx+1}" for idx, g in enumerate(br_order.index)}
+        groups_sorted = list(br_order.index)
 
-        pivot = (
+        # ---------- tabelas ----------
+        pivot_br = (
             df_all.groupby([self.date_col, group_col])[self.target_col]
             .mean()
             .unstack(group_col)
-            .reindex(columns=groups)
+            .reindex(columns=groups_sorted)
             .sort_index()
         )
-
         counts = (
-            df_all.groupby([self.date_col, group_col])
-            .size()
+            df_all.groupby([self.date_col, group_col]).size()
             .unstack(group_col)
-            .reindex(columns=groups, fill_value=0)
+            .reindex(columns=groups_sorted, fill_value=0)
             .sort_index()
         )
         pct = counts.div(counts.sum(axis=1), axis=0)
 
+        # ---------- cores ----------
         self._compute_group_palette()
         colors = self.group_palette_ or {}
 
+        # ---------- figura Bad-Rate ----------
         fig_rate = go.Figure()
-        for col in pivot.columns:
+        for g in groups_sorted:
+            periods = pivot_br.index.strftime("%Y%m")
+            vols = counts[g].apply(lambda v: f"{v:,}".replace(",", "."))
+            custom = np.stack([periods, vols], axis=-1)
+
             fig_rate.add_trace(
                 go.Scatter(
-                    x=pivot.index,
-                    y=pivot[col],
+                    x=pivot_br.index,
+                    y=pivot_br[g],
                     mode="lines+markers",
-                    name=str(col),
-                    line=dict(color=colors.get(col)),
+                    name=gh_label[g],
+                    line=dict(color=colors.get(g)),
+                    marker=dict(color=colors.get(g)),
+                    customdata=custom,  # [[safra, volume_fmt]]
+                    hovertemplate=(
+                        # Cabeçalho de safra fica por conta do hover unified
+                        "Bad Rate: %{y:.2%}<br>"
+                        "Volume: %{customdata[1]}<br>"
+                        "Intervalo: " + str(g) +
+                        "<extra></extra><br>"        # não remover!
+                    ),
                 )
             )
-        fig_rate.update_layout(
-            title=title or "Event Rate by Group over Time",
-            yaxis_title="Event rate",
-            xaxis_title=self.date_col,
-            template="plotly_white",
-        )
+            fig_rate.update_layout(
+                title=title or "Bad Rate por GH",
+                yaxis_title="Bad Rate",
+                xaxis_title="Safra",
+                template="plotly_white",
+                hovermode="x unified",   # mostra todos os GHs juntos
+                xaxis_showgrid=False,
+                yaxis_showgrid=False,
+                yaxis_tickformat=".0%",  # 1 casa decimal
+                legend_title="Grupos Homogêneos",
+            )
 
+        # ---------- figura Participação ----------
         fig_share = go.Figure()
-        for col in pct.columns:
+        for g in groups_sorted:
             fig_share.add_trace(
                 go.Bar(
                     x=pct.index,
-                    y=pct[col],
-                    name=str(col),
-                    marker=dict(color=colors.get(col)),
+                    y=pct[g],
+                    name=gh_label[g],
+                    marker=dict(color=colors.get(g)),
+                    customdata=counts[g],
+                    hovertemplate=(
+                        "Safra: %{x|%Y%m}<br>"
+                        "Participação: %{y:.1%}<br>"
+                        "Volume: %{customdata:,}<br>"
+                        "Intervalo: " + str(g) + "<extra></extra>"
+                    ),
                 )
             )
         fig_share.update_layout(
             barmode="stack",
-            title="Group Share over Time",
-            yaxis_title="Group share",
+            #bargap=0.05,  # 👈 barras mais próximas (não funciona bem com datas)
+            title="Participação dos GHs",
+            yaxis_title="Participação",
             yaxis_tickformat=".0%",
-            xaxis_title=self.date_col,
+            xaxis_title="Safra",
             template="plotly_white",
+            xaxis_showgrid=False,
+            yaxis_showgrid=False,
+            legend_title="Grupos Homogêneos",
         )
 
+        # ---------- salvar opcional ----------
         if save and self.save_dir:
-            fig_rate.write_image(str(self.save_dir / "event_rate.png"))
-            fig_share.write_image(str(self.save_dir / "group_share.png"))
-
-        fig_rate.show()
-        fig_share.show()
+            fig_rate.write_image(self.save_dir / "event_rate.png")
+            fig_share.write_image(self.save_dir / "group_share.png")
 
         return fig_rate, fig_share
+
+
+    # def plot_event_rate(
+    #     self,
+    #     *,
+    #     save: bool = False,
+    #     title: str = "",
+    # ) -> tuple[go.Figure, go.Figure]:
+    #     """
+    #     Gera dois gráficos Plotly:
+    #     1. Bad-Rate por GH ao longo do tempo
+    #     2. Participação de GHs ao longo do tempo
+    #     Hover inclui Safra, Volume e Intervalo; gridlines removidos.
+    #     """
+
+    #     import pandas as pd
+    #     import numpy as np
+    #     import plotly.graph_objects as go
+
+    #     # ---------- validações ----------
+    #     if self.date_col is None:
+    #         raise ValueError("`date_col` is required for plot_event_rate().")
+
+    #     group_col = next(
+    #         (c for c in [self.group_col, self.group_col_] if c and c in self.data_.columns),
+    #         None,
+    #     )
+    #     if group_col is None:
+    #         raise ValueError("Group column not found for plot_event_rate().")
+
+    #     # ---------- dataset único ----------
+    #     df_all = pd.concat(
+    #         [
+    #             self.df_train.assign(Split="Train"),
+    #             self.df_test.assign(Split="Test"),
+    #             *([self.df_val.assign(Split="Val")] if self.df_val is not None else []),
+    #         ],
+    #         axis=0,
+    #     )
+    #     df_all[self.date_col] = pd.to_datetime(df_all[self.date_col])
+
+    #     # ---------- ordenação GH por Bad-Rate ----------
+    #     br_order = (
+    #         df_all.groupby(group_col)[self.target_col].mean()
+    #         .sort_values(ascending=False)
+    #     )  # maior BR primeiro
+    #     gh_label = {g: f"GH{idx+1}" for idx, g in enumerate(br_order.index)}
+
+    #     # ---------- tabelas ----------
+    #     groups_sorted = list(br_order.index)
+
+    #     pivot_br = (
+    #         df_all.groupby([self.date_col, group_col])[self.target_col]
+    #         .mean()
+    #         .unstack(group_col)
+    #         .reindex(columns=groups_sorted)
+    #         .sort_index()
+    #     )
+
+    #     counts = (
+    #         df_all.groupby([self.date_col, group_col])
+    #         .size()
+    #         .unstack(group_col)
+    #         .reindex(columns=groups_sorted, fill_value=0)
+    #         .sort_index()
+    #     )
+    #     pct = counts.div(counts.sum(axis=1), axis=0)
+
+    #     # ---------- cores ----------
+    #     self._compute_group_palette()
+    #     colors = self.group_palette_ or {}
+
+    #     # ---------- figura Bad-Rate ----------
+    #     fig_rate = go.Figure()
+    #     for g in groups_sorted:
+    #         periods = pivot_br.index.strftime("%Y%m")
+    #         volumes_fmt = counts[g].apply(lambda v: f"{v:,}".replace(",", "."))
+    #         custom = np.stack([periods, volumes_fmt], axis=-1)
+
+    #         fig_rate.add_trace(
+    #             go.Scatter(
+    #                 x=pivot_br.index,
+    #                 y=pivot_br[g],
+    #                 mode="lines+markers",
+    #                 name=gh_label[g],
+    #                 line=dict(color=colors.get(g)),
+    #                 marker=dict(color=colors.get(g)),
+    #                 customdata=custom,
+    #                 hovertemplate=(
+    #                     "Safra: %{customdata[0]}<br>"
+    #                     "KS: %{y:.4f}<extra></extra>"
+    #                 ).replace("KS", "Bad Rate")  # manter formatação
+    #                 .replace(
+    #                     "<extra></extra>",
+    #                     "<br>Volume: %{customdata[1]}<br>Intervalo: " + str(g) + "<extra></extra>",
+    #                 ),
+    #             )
+    #         )
+    #     fig_rate.update_layout(
+    #         title=title or "Bad Rate por GH",
+    #         yaxis_title="Bad Rate",
+    #         xaxis_title="Safra",
+    #         template="plotly_white",
+    #         xaxis_showgrid=False,
+    #         yaxis_showgrid=False,
+    #         legend_title="Grupos Homogêneos",
+    #     )
+
+    #     # ---------- figura Participação ----------
+    #     fig_share = go.Figure()
+    #     for g in groups_sorted:
+    #         fig_share.add_trace(
+    #             go.Bar(
+    #                 x=pct.index,
+    #                 y=pct[g],
+    #                 name=gh_label[g],
+    #                 marker=dict(color=colors.get(g)),
+    #                 hovertemplate=(
+    #                     "Safra: %{x|%Y%m}<br>"
+    #                     "Participação: %{y:.1%}<br>"
+    #                     "Volume: %{customdata:,}"
+    #                     "<br>Intervalo: " + str(g) + "<extra></extra>"
+    #                 ),
+    #                 customdata=counts[g],
+    #             )
+    #         )
+    #     fig_share.update_layout(
+    #         barmode="stack",
+    #         title="Participação dos GHs",
+    #         yaxis_title="Participação",
+    #         yaxis_tickformat=".0%",
+    #         xaxis_title="Safra",
+    #         template="plotly_white",
+    #         xaxis_showgrid=False,
+    #         yaxis_showgrid=False,
+    #         legend_title="Grupos Homogêneos",
+    #     )
+
+    #     # ---------- salvar opcional ----------
+    #     if save and self.save_dir:
+    #         fig_rate.write_image(self.save_dir / "event_rate.png")
+    #         fig_share.write_image(self.save_dir / "group_share.png")
+
+    #     fig_rate.show()
+    #     fig_share.show()
+
+    #     return
+
 
     def plot_psi(
         self,
@@ -897,74 +1052,119 @@ class BinaryPerformanceEvaluator:
         )
         fig.update_layout(
             title=title or "PSI over Time by Variable",
-            xaxis_title="Period",
-            yaxis_title="Population Stability Index",
+            xaxis_title="Safra",
+            yaxis_title="PSI",
             template="plotly_white",
         )
         if save and self.save_dir:
             fig.write_image(str(self.save_dir / "psi_over_time.png"))
-        fig.show()
+        
+        #fig.show()
         return fig, psi_df
 
-    def plot_ks(self, *, save: bool = False, title: str = "") -> go.Figure:
-        """KS statistic over time for each split using Plotly."""
+    def plot_ks(
+        self,
+        *,
+        save: bool = False,
+        title: str = "",
+    ) -> go.Figure | None:
+        """
+        KS por safra para Train/Test/(Val) com cores fixas e hover customizado.
+        """
+
+        import warnings
+        from sklearn.metrics import roc_curve
+        import numpy as np
+        import pandas as pd
+        import plotly.graph_objects as go
+
         if self.date_col is None:
-            raise ValueError("`date_col` is required for plot_ks().")
+            raise ValueError("`date_col` é obrigatório para plot_ks().")
         self._validate_predictors()
 
         def ks_stat(y_true: np.ndarray, y_pred: np.ndarray) -> float:
             fpr, tpr, _ = roc_curve(y_true, y_pred)
-            return np.max(np.abs(tpr - fpr))
+            return float(np.max(np.abs(tpr - fpr)))
 
+        # ------- prepara splits disponíveis --------
         dfs = [
-            ("Train", self.df_train),
-            ("Test", self.df_test),
-            *([("Val", self.df_val)] if self.df_val is not None else []),
+            ("Train", self.df_train, "#7f7f7f"),
+            ("Test", self.df_test, "#1f77b4"),
+            *(
+                [("Val", self.df_val, "#d62728")]
+                if getattr(self, "df_val", None) is not None
+                else []
+            ),
         ]
 
         ks_records = []
-        for split_name, df in dfs:
+        for split_name, df, _ in dfs:
             df = df.copy()
-            df["Period"] = pd.to_datetime(df[self.date_col]).dt.to_period("M")
-            for period, grp in df.groupby("Period"):
+            df["Safra"] = pd.to_datetime(df[self.date_col]).dt.to_period("M")
+            for safra, grp in df.groupby("Safra", sort=True):
                 y_true = grp[self.target_col].values
-                y_pred = self.model.predict_proba(grp[self.predictor_cols])[
-                    :, self._pos_class_idx
-                ]
+                y_pred = self.model.predict_proba(grp[self.predictor_cols])[:, self._pos_class_idx]
                 ks = ks_stat(y_true, y_pred)
                 ks_records.append(
-                    {"Split": split_name, "Period": period.to_timestamp(), "KS": ks}
+                    {
+                        "Split": split_name,
+                        "Safra": safra.to_timestamp(),
+                        "Safra_fmt": safra.strftime("%Y%m"),
+                        "KS": ks,
+                        "Volume": len(grp),
+                    }
                 )
 
         ks_df = pd.DataFrame(ks_records)
         if ks_df.empty:
-            warnings.warn("KS could not be computed (insufficient data).")
-            return
+            warnings.warn("KS não pode ser computado (dados insuficientes).")
+            return None
 
+        # ------- plotly --------
         fig = go.Figure()
-        for split, grp in ks_df.groupby("Split"):
+        for split, color in [("Train", "#7f7f7f"), ("Test", "#d62728"), ("Val", "#1f77b4")]:
+            grp = ks_df[ks_df["Split"] == split]
+            if grp.empty:
+                continue
             fig.add_trace(
                 go.Scatter(
-                    x=grp["Period"],
+                    x=grp["Safra"],
                     y=grp["KS"],
                     mode="lines+markers",
-                    name=str(split),
+                    name=split,
+                    line=dict(color=color),
+                    marker=dict(color=color),
+                    customdata=np.stack([grp["Safra_fmt"], grp["Volume"]], axis=-1),
+                    hovertemplate=(
+                        "Safra: %{customdata[0]}<br>"
+                        "KS: %{y:.4f}<br>"
+                        "Volume: %{customdata[1]:,}"
+                    ),
                 )
             )
+
+        # linha de referência 0.20
         fig.add_hline(
-            y=0.05, line=dict(color="gray", dash="dash"), annotation_text="0.05"
+            y=0.20,
+            line=dict(color="gray", dash="dash"),
+            annotation_text="0.20",
+            annotation_position="top right",
         )
+
         fig.update_layout(
-            title=title or "KS Evolution over Time",
-            xaxis_title="Period",
-            yaxis_title="Kolmogorov–Smirnov",
+            title=title or "KS por Safra",
+            xaxis_title="Safra",
+            yaxis_title="KS",
             xaxis=dict(showgrid=False),
-            yaxis=dict(showgrid=False),
+            yaxis=dict(showgrid=False, range=[0, max(0.05, ks_df['KS'].max() * 1.1)]),
             template="plotly_white",
         )
+
         if save and self.save_dir:
             fig.write_image(str(self.save_dir / "ks_evolution.png"))
+
         return fig
+
 
     def plot_group_radar(
         self,
@@ -974,41 +1174,43 @@ class BinaryPerformanceEvaluator:
         save: bool = False,
         title: str = "",
     ) -> go.Figure:
-        """Return radar chart of average feature values per homogeneous group."""
+        """Radar chart das médias por grupo, com grupos de maior risco por cima."""
         if self.group_ is None:
             raise ValueError("Homogeneous groups were not computed.")
 
         self._compute_group_palette()
-
         df = self.data_.copy()
-        # Seleção de features
+
+        # ---------- seleção de features numéricas ----------
         if features is None:
             numeric_predictors = [
-                c for c in self.predictor_cols 
-                if pd.api.types.is_numeric_dtype(df[c])
+                c for c in self.predictor_cols if pd.api.types.is_numeric_dtype(df[c])
             ]
             features = numeric_predictors
         if not features:
             raise ValueError("No numeric features available for radar plot.")
 
-        # Escalonamento
+        # ---------- escalonamento ----------
         if scaler == "zscore":
             scaled = df[features].apply(lambda x: (x - x.mean()) / x.std(ddof=0))
         else:
             scaled = df[features].apply(lambda x: (x - x.min()) / (x.max() - x.min()))
 
-        # Média por grupo
+        # ---------- média por grupo ----------
         mean_by_group = scaled.groupby(df[self.group_col_])[features].mean()
 
-        # Preparação do gráfico
+        # ---------- ordena grupos por event-rate ----------
+        event_rate = (
+            df.groupby(self.group_col_)[self.target_col].mean().sort_values()
+        )  # ascendente
+        ordered_groups = list(event_rate.index)  # do menor (azul) ao maior (vermelho)
+
+        # ---------- gráfico ----------
         fig = go.Figure()
-        for group_id, row in mean_by_group.iterrows():
-            # Lista original de thetas e valores
-            theta = features.copy()
-            r = row.values.tolist()
-            # Fecha o polígono repetindo o primeiro ponto
-            theta.append(theta[0])
-            r.append(r[0])
+        for group_id in ordered_groups:
+            row = mean_by_group.loc[group_id]
+            theta = features + [features[0]]             # fecha polígono
+            r = row.tolist() + [row.iloc[0]]
 
             fig.add_trace(
                 go.Scatterpolar(
@@ -1021,23 +1223,18 @@ class BinaryPerformanceEvaluator:
                 )
             )
 
-        # Layout: oculta eixo radial e configura template
         fig.update_layout(
             template="plotly_white",
             title=title or "Group Radar",
-            polar=dict(
-                radialaxis=dict(
-                    visible=False
-                )
-            ),
-            showlegend=True
+            polar=dict(radialaxis=dict(visible=False)),
+            showlegend=True,
         )
 
-        # Salvamento opcional
         if save and self.save_dir:
             fig.write_image(str(self.save_dir / "group_radar.png"))
 
         return fig
+
 
 
     def plot_decile_ks(
