@@ -1,9 +1,15 @@
+from importlib.util import find_spec
+
 import pandas as pd
+import pytest
 from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
 
 from riskpilot.evaluation import BinaryPerformanceEvaluator
 from riskpilot.synthetic import SyntheticVintageGenerator
+
+kaleido_available = find_spec("kaleido") is not None
+pytestmark = pytest.mark.skipif(not kaleido_available, reason="kaleido not installed")
 
 
 def test_run_stress_pipeline(tmp_path):
