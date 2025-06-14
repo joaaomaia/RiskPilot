@@ -147,6 +147,28 @@ resultados/
 
 ---
 
+## Synthetic Vintage Generator
+
+```python
+from riskpilot.synthetic import SyntheticVintageGenerator
+
+gen = SyntheticVintageGenerator(
+    id_cols=["contract_id"],
+    date_cols=["snapshot_date"],
+    random_state=42,
+).fit(df_hist)
+
+df_future = gen.generate(n_periods=36, freq="M")
+```
+
+### Date granularity & plotting
+
+Datas sem componente de hora permanecem como datas puras, evitando rótulos
+``00:00:00`` em gráficos. Se as colunas de data incluírem horas, elas são
+mantidas na geração e nas visualizações.
+
+---
+
 ## 🧪 Testado com
 
 - scikit-learn 1.4+

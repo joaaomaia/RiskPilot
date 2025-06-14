@@ -35,6 +35,11 @@ class SyntheticVintageGenerator:
     ):
         self.id_cols = set(id_cols)
         self.date_cols = set(date_cols)
+        self._date_cols = list(date_cols)
+        self._date_has_time: Dict[str, bool] = {}
+        self._max_dates: Dict[str, pd.Timestamp] = {}
+        self._has_time_component = False
+        self._max_date = pd.Timestamp.min
         self.keep_cols = set(keep_cols or [])
         self.ignore_cols = set(ignore_cols or [])
         self.random_state = np.random.RandomState(random_state)
@@ -63,6 +68,15 @@ class SyntheticVintageGenerator:
         self._order = [
             c for c in df.columns if c not in self.ignore_cols and c not in self.date_cols
         ]
+
+        for col in self._date_cols:
+            ser = pd.to_datetime(df[col].dropna())
+            self._date_has_time[col] = (ser.dt.floor("s") != ser.dt.normalize()).any()
+            if not ser.empty:
+                self._max_dates[col] = ser.max()
+        if self._date_cols:
+            self._has_time_component = self._date_has_time[self._date_cols[0]]
+            self._max_date = self._max_dates.get(self._date_cols[0], pd.Timestamp.min)
 
         for col in self._order:
             if col in self.id_cols:
@@ -107,33 +121,43 @@ class SyntheticVintageGenerator:
     # ------------------------------------------------------------------
     def generate(
         self,
-        n_periods: int,
+        n_periods: int | None = None,
         freq: str = "M",
         start_vintage: str | pd.Timestamp | None = None,
+        end_vintage: str | pd.Timestamp | None = None,
+        align_with_history: bool = True,
         scenario: str = "base",
         shocks: Optional[Dict[str, Dict[str, Any]]] = None,
         n_per_vintage: Optional[int] = None,
         preserve_corr: bool = True,
+        date_offsets: Optional[Dict[str, Any]] = None,
     ) -> pd.DataFrame:
-        """
-        Produz um dataframe concatenado com `n_periods` safras.
+        """Gera múltiplas safras sintéticas.
 
         Parameters
         ----------
-        n_periods : int
-            Número de períodos futuros.
+        n_periods : int, optional
+            Número de períodos a gerar. Necessário quando ``end_vintage`` não é
+            informado.
         freq : str
             Frequência de cada safra (ex.: "M", "Q", "A").
         start_vintage : str | pd.Timestamp | None
-            Primeiro período; default = mês seguinte ao último da amostra.
+            Período inicial. Se ``align_with_history=True`` e ``start_vintage``
+            for ``None`` utiliza ``max(date_cols) + freq``.
+        end_vintage : str | pd.Timestamp | None
+            Data final desejada; sobrescreve ``n_periods`` se fornecida.
+        align_with_history : bool, default True
+            Garante continuidade temporal usando a última data observada.
         scenario : {"base", "stress"}
             Controla intensidade do ruído.
         shocks : dict, opcional
             Choques direcionados por coluna.
         n_per_vintage : int, opcional
-            Tamanho fixo; se None → bootstrap do histórico.
+            Tamanho fixo; se ``None`` → bootstrap do histórico.
         preserve_corr : bool
             Usa cópula gaussiana para manter correlações numéricas.
+        date_offsets : dict, opcional
+            Deslocamentos específicos para cada coluna de data.
         """
         if not self._fitted:
             raise RuntimeError("Execute .fit() antes de .generate().")
@@ -143,15 +167,46 @@ class SyntheticVintageGenerator:
 
         offset = self._normalize_freq(freq)
 
-        # tabela de datas-safra
-        if start_vintage is None:
+        if start_vintage is not None:
+            start_vintage = pd.to_datetime(start_vintage)
+        elif align_with_history:
+            start_vintage = pd.to_datetime(self._max_date) + offset
+            if not self._has_time_component:
+                start_vintage = start_vintage.normalize()
+        else:
             start_vintage = pd.Timestamp.today().normalize() + offset
-        vint_dates = pd.date_range(start=start_vintage, periods=n_periods, freq=offset)
+
+        if end_vintage is not None:
+            end_vintage = pd.to_datetime(end_vintage)
+            vint_dates = pd.date_range(
+                start=start_vintage,
+                end=end_vintage,
+                freq=offset,
+                normalize=not self._has_time_component,
+            )
+        else:
+            if n_periods is None:
+                raise ValueError("n_periods or end_vintage must be specified")
+            vint_dates = pd.date_range(
+                start=start_vintage,
+                periods=n_periods,
+                freq=offset,
+                normalize=not self._has_time_component,
+            )
+
+        expected = pd.date_range(
+            start=vint_dates[0],
+            end=vint_dates[-1],
+            freq=offset,
+            normalize=not self._has_time_component,
+        )
+        if len(expected) != len(vint_dates):
+            raise ValueError("Generated dates are not continuous with the given frequency")
 
         for vint in vint_dates:
             n_rows = n_per_vintage or self.random_state.choice([500, 1000, 2000])
             df_v = self._generate_one_vintage(
-                n_rows, vint, scenario, shocks, preserve_corr
+                n_rows, vint, scenario, shocks, preserve_corr, date_offsets
             )
             df_list.append(df_v)
 
@@ -167,13 +222,19 @@ class SyntheticVintageGenerator:
         scenario: str,
         shocks: Dict[str, Dict[str, Any]],
         preserve_corr: bool,
+        date_offsets: Optional[Dict[str, Any]],
     ) -> pd.DataFrame:
         # 1. gera base vazia
         data = {}
         for col in self.id_cols:
             data[col] = [uuid.uuid4().hex for _ in range(n_rows)]
-        for col in self.date_cols:
-            data[col] = np.full(n_rows, vint_date)
+        for col in self._date_cols:
+            col_date = vint_date
+            if date_offsets and col in date_offsets:
+                col_date = col_date + self._normalize_freq(date_offsets[col])
+            if not self._date_has_time.get(col, True):
+                col_date = pd.to_datetime(col_date).normalize()
+            data[col] = np.full(n_rows, col_date)
 
         # 2. gera numéricas/categóricas independentes
         indep_vars = {}

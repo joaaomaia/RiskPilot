@@ -245,6 +245,7 @@ class BinaryPerformanceEvaluator:
             n_periods=self.stress_periods,
             freq=self.stress_freq,
             scenario=self.stress_scenario,
+            align_with_history=False,
         )
 
         run_id = uuid.uuid4().hex
