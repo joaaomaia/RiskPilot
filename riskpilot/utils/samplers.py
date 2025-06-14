@@ -94,16 +94,24 @@ class TemporalIDSampler:
             force_continuous,
         )
 
-    # --------------------------------------------------------------------- #
+    # ----------------------------------------------------------------- #
+    def _to_dt(self, val):
+        """Converte limites em datetime compatível com date_col."""
+        if isinstance(val, (int, np.integer, str)) and len(str(val)) in (6, 8):
+            # 6 dígitos = yyyymm   | 8 dígitos = yyyymmdd
+            fmt = "%Y%m" if len(str(val)) == 6 else "%Y%m%d"
+            return pd.to_datetime(str(val), format=fmt)
+        return pd.to_datetime(val)
+
     def _subset_window(self, start, end) -> pd.DataFrame:
-        mask = (self.df[self.date_col] >= pd.to_datetime(start)) & (
-            self.df[self.date_col] <= pd.to_datetime(end)
-        )
+        start_dt, end_dt = self._to_dt(start), self._to_dt(end)
+        mask = (self.df[self.date_col] >= start_dt) & (self.df[self.date_col] <= end_dt)
         subset = self.df.loc[mask].copy()
         logger.info(
-            "Seleção janela %s → %s: %d registros", start, end, len(subset)
+            "Seleção janela %s → %s: %d registros", start_dt.date(), end_dt.date(), len(subset)
         )
         return subset
+
 
     # --------------------------------------------------------------------- #
     def _sample_snapshot(self, df_win: pd.DataFrame) -> pd.DataFrame:
