@@ -46,3 +46,21 @@ def test_seaborn_plots_smoke():
     )
     figs = bev.plot_event_rate()
     assert all(isinstance(f, go.Figure) for f in figs)
+
+
+@skip_if_no_optbinning
+def test_plot_psi_last_period():
+    train, test = _split()
+    model = LogisticRegression().fit(train[["a", "b", "c"]], train["target"])
+    bev = BinaryPerformanceEvaluator(
+        model=model,
+        df_train=train,
+        df_test=test,
+        target_col="target",
+        id_cols=["id"],
+        date_col="date",
+        homogeneous_group="auto",
+    )
+    fig, df = bev.plot_psi(reference_last_period=True, min_obs=1)
+    assert isinstance(fig, go.Figure)
+    assert not df.empty and "reference_type" in df.columns
