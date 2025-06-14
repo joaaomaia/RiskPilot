@@ -51,6 +51,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import seaborn as sns
 
+
 try:
     from optbinning import OptimalBinning
 except ImportError:  # pragma: no cover - optional dependency
@@ -202,36 +203,75 @@ class BinaryPerformanceEvaluator:
         self._assign_groups()
 
     ## ---------- public API ----------
-    def compute_metrics(self) -> pd.DataFrame:
-        """Compute metrics and return them as a DataFrame."""
-        self._validate_predictors()
+
+    def compute_metrics(
+        self,
+        *,
+        by_date_col: bool = False,
+    ) -> pd.DataFrame:
+        """
+        Calcula métricas globais ou por safra (date_col).
+
+        Parameters
+        ----------
+        by_date_col : bool, default False
+            Se True, as métricas são computadas por período usando `self.date_col`.
+
+        Returns
+        -------
+        pd.DataFrame
+            • Modo padrão: índice "Split" com métricas globais.  
+            • Modo `by_date_col=True`: MultiIndex ("Split", date_col) ordenado
+            ascendentemente pelo campo de data.
+        """
+
+        # ---------------- helper ------------------------------------ #
+        def _row(df_slice: pd.DataFrame, split: str, period=None) -> dict:
+            """Retorna dicionário de métricas para o slice informado."""
+            y_true = df_slice[self.target_col].values
+            y_pred_proba = df_slice[self.score_col_].values
+
+            return {
+                "Split": split.capitalize(),
+                **({"Period": period} if period is not None else {}),
+                "MCC": matthews_corrcoef(y_true, (y_pred_proba >= self.threshold).astype(int)),
+                "AUC_ROC": roc_auc_score(y_true, y_pred_proba),
+                "AUC_PR": average_precision_score(y_true, y_pred_proba),
+                "Precision": precision_score(y_true, (y_pred_proba >= self.threshold).astype(int)),
+                "Recall": recall_score(y_true, (y_pred_proba >= self.threshold).astype(int)),
+                "Brier": brier_score_loss(y_true, y_pred_proba),
+            }
+
+        # ---------------- splits ------------------------------------ #
         splits = {"train": self.df_train, "test": self.df_test}
         if self.df_val is not None:
             splits["val"] = self.df_val
 
+        date_col = self.date_col if by_date_col else None
+        if by_date_col and not date_col:
+            raise ValueError("`date_col` precisa ser definido para by_date_col=True.")
+
         records = []
         for split_name, df in splits.items():
-            y_true = df[self.target_col].values
-            y_pred_proba = df[self.score_col_].values
+            if by_date_col and date_col in df.columns:
+                # garante ordenação ascendente por safra
+                df_sorted = df.sort_values(date_col)
+                for period, df_period in df_sorted.groupby(date_col, sort=True):
+                    records.append(_row(df_period, split_name, period))
+            else:
+                records.append(_row(df, split_name))
 
-            metrics_dict = {
-                "MCC": matthews_corrcoef(
-                    y_true, (y_pred_proba >= self.threshold).astype(int)
-                ),
-                "AUC_ROC": roc_auc_score(y_true, y_pred_proba),
-                "AUC_PR": average_precision_score(y_true, y_pred_proba),
-                "Precision": precision_score(
-                    y_true, (y_pred_proba >= self.threshold).astype(int)
-                ),
-                "Recall": recall_score(
-                    y_true, (y_pred_proba >= self.threshold).astype(int)
-                ),
-                "Brier": brier_score_loss(y_true, y_pred_proba),
-            }
-            self.report[split_name] = metrics_dict
-            records.append({"Split": split_name.capitalize(), **metrics_dict})
+        metrics_df = pd.DataFrame(records)
 
-        return pd.DataFrame(records).set_index("Split")
+        # ---------------- index -------------------------------------- #
+        if by_date_col and "Period" in metrics_df.columns:
+            metrics_df.set_index(["Split", "Period"], inplace=True)
+        else:
+            metrics_df.set_index("Split", inplace=True)
+
+        return metrics_df
+
+
 
     def run_stress_test(self) -> Dict[str, Any]:
         """Generate synthetic vintages and evaluate stress metrics."""
@@ -287,132 +327,267 @@ class BinaryPerformanceEvaluator:
         """Return the binning table used for homogeneous groups."""
         return self.binning_table_
 
+
     def plot_confusion(
         self,
-        y_true: pd.Series,
-        y_pred_proba: np.ndarray,
         *,
         threshold: float | str = 0.5,
+        splits: list[str] | None = None,
         normalize: bool = False,
-        title: str = "",
         cmap: str = "Blues",
-        group_col: Optional[pd.Series] = None,
-    ) -> go.Figure | Dict[Any, go.Figure]:
-        """Return confusion matrix figure(s).
+        figsize: tuple[int, int] = (5, 5),
+        save: bool = False,
+        display: bool = False,
+        title_prefix: str = "Matriz de Confusão",
+    ):
+        """
+        Desenha matrizes de confusão (Train/Test/Val) via seaborn,
+        calculando as probabilidades na hora, direto do modelo.
 
         Parameters
         ----------
-        y_true : pd.Series
-            True binary labels.
-        y_pred_proba : np.ndarray
-            Predicted probabilities for the positive class.
-        threshold : float | {"ks", "youden"}, default 0.5
-            Probability threshold or method to determine it.
-        normalize : bool, default False
-            If ``True``, heatmap values are percentages.
-        title : str, default ""
-            Figure title.
-        cmap : str, default "Blues"
-            Plotly colour scale name.
-        group_col : pd.Series, optional
-            When provided, one figure per group will be returned.
+        threshold : float | {"ks","youden"}
+            Cut-off fixo ou regra baseada no split Train.
+        splits : list[str] | None
+            Lista de splits desejados ("train","test","val"). None → todos disponíveis.
+        normalize : bool
+            Se True, escala de cor = %. Se False, = contagem absoluta.
+        cmap : str
+            Paleta seaborn/matplotlib.
+        figsize : tuple
+            Tamanho de CADA subplot.
+        save : bool
+            Salva PNG em `self.save_dir`.
+        display : bool
+            Exibe figura no notebook; se False evita duplicação.
+        title_prefix : str
+            Prefixo do título; o nome do split é acrescentado.
         """
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        from sklearn.metrics import confusion_matrix, roc_curve
+        import numpy as np
+        import pandas as pd
 
-        def _best_threshold(method: str) -> float:
-            fpr, tpr, thr = roc_curve(y_true, y_pred_proba)
-            if method == "youden":
-                score = tpr - fpr
-            else:
-                score = tpr - fpr
-            return float(thr[np.argmax(score)])
+        # ---------------- helpers ---------------- #
+        def _pos_idx() -> int:
+            """Retorna o índice da classe positiva (1) no predict_proba."""
+            return list(self.model.classes_).index(1)
 
+        def _best_threshold(y, p, meth: str) -> float:
+            fpr, tpr, thr = roc_curve(y, p)
+            return float(thr[np.nanargmax(tpr - fpr)])  # KS = Youden
+
+        # ---------------- splits ------------------ #
+        available = {"train": self.df_train, "test": self.df_test}
+        if getattr(self, "df_val", None) is not None:
+            available["val"] = self.df_val
+
+        if splits is None:
+            splits = list(available.keys())
+        else:
+            splits = [s.lower() for s in splits]
+            invalid = [s for s in splits if s not in available]
+            if invalid:
+                raise ValueError(f"Splits inválidos: {invalid}")
+
+        # --------------- threshold ---------------- #
+        pos_idx = _pos_idx()
         if isinstance(threshold, str):
-            threshold = _best_threshold(threshold.lower())
+            ref = available["train"]
+            thr_y = ref[self.target_col].values
+            thr_p = self.model.predict_proba(ref[self.predictor_cols])[:, pos_idx]
+            threshold = _best_threshold(thr_y, thr_p, threshold.lower())
 
-        if group_col is not None:
-            figs: Dict[Any, go.Figure] = {}
-            for group, mask in group_col.groupby(group_col).groups.items():
-                figs[group] = self.plot_confusion(
-                    y_true[mask],
-                    y_pred_proba[mask],
-                    threshold=threshold,
-                    normalize=normalize,
-                    title=f"{title} - {group}" if title else str(group),
-                    cmap=cmap,
-                )
-            return figs
+        # -------------- subplots ------------------ #
+        n = len(splits)
+        fig, axes = plt.subplots(
+            1, n, figsize=(figsize[0] * n, figsize[1]), squeeze=False
+        )
+        axes = axes.flatten()
 
-        y_pred = (y_pred_proba >= float(threshold)).astype(int)
-        cm_abs = confusion_matrix(y_true, y_pred, labels=[0, 1])
-        cm_pct = cm_abs / cm_abs.sum()
-        matrix = cm_pct if normalize else cm_abs
+        for ax, split in zip(axes, splits):
+            df_split = available[split]
 
-        fig = go.Figure(
-            data=go.Heatmap(
-                z=matrix,
-                x=["Pred 0", "Pred 1"],
-                y=["True 0", "True 1"],
-                colorscale=cmap,
-                showscale=False,
+            y_true = df_split[self.target_col].values
+            y_proba = self.model.predict_proba(df_split[self.predictor_cols])[:, pos_idx]
+            y_pred = (y_proba >= float(threshold)).astype(int)
+
+            cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+            cm_pct = cm / cm.sum()  # % em relação ao TOTAL do split
+
+            annot = np.empty_like(cm).astype(object)
+            for i in range(2):
+                for j in range(2):
+                    contagem = f"{cm[i, j]:,}".replace(",", ".")
+                    percentual = f"{cm_pct[i, j]*100:.1f}".replace(".", ",")
+                    annot[i, j] = f"{contagem}\n{percentual}%"
+
+            heat_data = cm_pct if normalize else cm
+            sns.heatmap(
+                heat_data,
+                annot=annot,
+                fmt="",
+                cmap=cmap,
+                cbar=False,
+                vmin=0,
+                vmax=heat_data.max() if heat_data.max() > 0 else 1,
+                xticklabels=["Previsto 0", "Previsto 1"],
+                yticklabels=["Real 0", "Real 1"],
+                ax=ax,
             )
-        )
-        fig.update_yaxes(autorange="reversed")
+            ax.set_title(f"{title_prefix} – {split.capitalize()}")
+            ax.set_xlabel("Previsto")
+            ax.set_ylabel("Real")
 
-        for i in range(2):
-            for j in range(2):
-                fig.add_annotation(
-                    x=j,
-                    y=i,
-                    text=f"{cm_abs[i, j]:,}\n({100 * cm_pct[i, j]:.1f}%)",
-                    showarrow=False,
-                    font=dict(color="white" if cm_pct[i, j] > 0.5 else "black"),
-                )
-
-        fig.update_layout(
-            title=title or "Confusion Matrix",
-            xaxis_title="Predicted label",
-            yaxis_title="True label",
-            template="plotly_white",
-        )
-        return fig
-
-    def plot_calibration(
-        self, *, n_bins: int = 10, save: bool = False, title: str = ""
-    ) -> go.Figure:
-        """Reliability diagram for test split using Plotly."""
-        self._validate_predictors()
-        y_true = self.df_test[self.target_col].values
-        y_pred_proba = self.model.predict_proba(self.df_test[self.predictor_cols])[
-            :, self._pos_class_idx
-        ]
-        prob_true, prob_pred = calibration_curve(
-            y_true,
-            y_pred_proba,
-            n_bins=n_bins,
-            strategy="uniform",
-        )
-
-        brier = brier_score_loss(y_true, y_pred_proba)
-
-        fig = go.Figure()
-        fig.add_trace(
-            go.Scatter(x=prob_pred, y=prob_true, mode="lines+markers", name="Model")
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=[0, 1], y=[0, 1], mode="lines", line=dict(dash="dash"), name="Ideal"
-            )
-        )
-        fig.update_layout(
-            title=title or f"Calibration Curve – Test (Brier = {brier:.4f})",
-            xaxis_title="Predicted probability",
-            yaxis_title="Observed frequency",
-            template="plotly_white",
-        )
+        plt.tight_layout()
 
         if save and self.save_dir:
-            fig.write_image(str(self.save_dir / "calibration_curve.png"))
+            fname = title_prefix.lower().replace(" ", "_") + ".png"
+            fig.savefig(self.save_dir / fname, dpi=150)
+
+        # Evita duplicação em notebooks
+        if display:
+            plt.show()
+        else:
+            plt.close(fig)
+
         return fig
+
+
+    def plot_calibration(
+        self,
+        *,
+        n_bins: int = 10,
+        splits: list[str] | None = None,
+        save: bool = False,
+        display: bool = False,
+        title_prefix: str = "Curva de Calibração",
+    ):
+        """
+        Desenha curvas de calibração (Train/Test/Val) usando seaborn.
+
+        Parameters
+        ----------
+        n_bins : int
+            Número de bins para o `calibration_curve`.
+        splits : list[str] | None
+            Ex.: ["train","test"]. None → todos os disponíveis.
+        save : bool
+            Se True, salva PNG em `self.save_dir`.
+        display : bool
+            Se False fecha a figura (útil p/ evitar duplicação).
+        title_prefix : str
+            Prefixo do título; o nome do split e Brier são acrescentados.
+        """
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        from sklearn.calibration import calibration_curve
+        from sklearn.metrics import brier_score_loss
+        import numpy as np
+
+        # ----------- obter splits disponíveis ----------
+        available = {"train": self.df_train, "test": self.df_test}
+        if getattr(self, "df_val", None) is not None:
+            available["val"] = self.df_val
+
+        if splits is None:
+            splits = list(available.keys())
+        else:
+            splits = [s.lower() for s in splits]
+            invalid = [s for s in splits if s not in available]
+            if invalid:
+                raise ValueError(f"Splits inválidos: {invalid}")
+
+        # ----------- índice da classe positiva ----------
+        pos_idx = list(self.model.classes_).index(1)
+
+        # ----------- figure & subplots -----------------
+        n = len(splits)
+        fig, axes = plt.subplots(
+            1, n, figsize=(5 * n, 5), squeeze=False
+        )
+        axes = axes.flatten()
+
+        for ax, split in zip(axes, splits):
+            df = available[split]
+            y_true = df[self.target_col].values
+            y_proba = self.model.predict_proba(df[self.predictor_cols])[:, pos_idx]
+
+            prob_true, prob_pred = calibration_curve(
+                y_true, y_proba, n_bins=n_bins, strategy="uniform"
+            )
+            brier = brier_score_loss(y_true, y_proba)
+
+            # linha modelo
+            sns.lineplot(x=prob_pred, y=prob_true, marker="o", ax=ax, label="Modelo")
+
+            # linha ideal
+            ax.plot([0, 1], [0, 1], linestyle="--", color="grey", label="Ideal")
+
+            # aspecto quadrado
+            ax.set_aspect("equal", adjustable="box")
+            ax.set_xlim(0, 1)
+            ax.set_ylim(0, 1)
+            ax.grid(False)  # 👈 REMOVE AS GRIDLINES
+            
+            ax.set_title(f"{title_prefix} – {split.capitalize()} (Brier = {brier:.4f})")
+            ax.set_xlabel("Probabilidade Prevista")
+            ax.set_ylabel("Frequência Observada")
+            ax.legend(loc="upper left")
+
+        plt.tight_layout()
+
+        if save and self.save_dir:
+            fname = title_prefix.lower().replace(" ", "_") + ".png"
+            fig.savefig(self.save_dir / fname, dpi=150)
+
+        if display:
+            plt.show()
+        else:
+            plt.close(fig)
+
+        return fig
+
+
+
+    # def plot_calibration(
+    #     self, *, n_bins: int = 10, save: bool = False, title: str = ""
+    # ) -> go.Figure:
+    #     """Reliability diagram for test split using Plotly."""
+    #     self._validate_predictors()
+    #     y_true = self.df_test[self.target_col].values
+    #     y_pred_proba = self.model.predict_proba(self.df_test[self.predictor_cols])[
+    #         :, self._pos_class_idx
+    #     ]
+    #     prob_true, prob_pred = calibration_curve(
+    #         y_true,
+    #         y_pred_proba,
+    #         n_bins=n_bins,
+    #         strategy="uniform",
+    #     )
+
+    #     brier = brier_score_loss(y_true, y_pred_proba)
+
+    #     fig = go.Figure()
+    #     fig.add_trace(
+    #         go.Scatter(x=prob_pred, y=prob_true, mode="lines+markers", name="Model")
+    #     )
+    #     fig.add_trace(
+    #         go.Scatter(
+    #             x=[0, 1], y=[0, 1], mode="lines", line=dict(dash="dash"), name="Ideal"
+    #         )
+    #     )
+    #     fig.update_layout(
+    #         title=title or f"Calibration Curve – Test (Brier = {brier:.4f})",
+    #         xaxis_title="Predicted probability",
+    #         yaxis_title="Observed frequency",
+    #         template="plotly_white",
+    #     )
+
+    #     if save and self.save_dir:
+    #         fig.write_image(str(self.save_dir / "calibration_curve.png"))
+    #     return fig
 
     def plot_event_rate(
         self, *, save: bool = False, title: str = ""
