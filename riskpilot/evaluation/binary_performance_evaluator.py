@@ -533,6 +533,8 @@ class BinaryPerformanceEvaluator:
             If ``True`` each cohort is compared with the immediately
             preceding one. When ``False`` the reference is ``df_train``
             or ``reference_df`` if provided.
+            Periods with fewer than ``min_obs`` records are skipped. Adjust
+            ``min_obs`` (e.g. ``min_obs=1``) if you have short time windows.
         save : bool, default False
             If ``True`` and ``save_dir`` is set, image is written to disk.
 
@@ -725,6 +727,7 @@ class BinaryPerformanceEvaluator:
         )
         if save and self.save_dir:
             fig.write_image(str(self.save_dir / "psi_over_time.png"))
+        fig.show()
         return fig, psi_df
 
     def plot_ks(self, *, save: bool = False, title: str = "") -> go.Figure:

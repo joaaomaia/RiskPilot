@@ -111,6 +111,8 @@ print(metrics)
 - Bins por quantis com base em dataset de referência
 - Possibilidade de usar o período imediatamente anterior como referência
 - Tolerante a valores fora do intervalo e períodos com poucos dados
+- É possível ajustar `min_obs` quando um período tem poucos registros
+  (ex.: `evaluator.plot_psi(reference_last_period=True, min_obs=1)`)
 - Indicação visual de faixas:
   - PSI ≤ 0.10 (aceitável)
   - PSI 0.10–0.25 (monitorar)
