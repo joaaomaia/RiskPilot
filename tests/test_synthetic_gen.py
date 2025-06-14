@@ -20,6 +20,15 @@ def test_synthetic_generator_basic():
     synth = gen.generate(n_periods=2, freq="D", n_per_vintage=5)
     assert set(["id", "date", "a", "b"]).issubset(synth.columns)
     assert len(synth) == 10
+    assert (synth["date"].dt.normalize() == synth["date"]).all()
+
+
+def test_generate_with_end_vintage():
+    df = pd.DataFrame({"id": range(3), "date": pd.date_range("2024-01-01", periods=3)})
+    gen = SyntheticVintageGenerator(id_cols=["id"], date_cols=["date"]).fit(df)
+    end = df["date"].max() + pd.offsets.Day(5)
+    synth = gen.generate(end_vintage=end, freq="D", n_per_vintage=1)
+    assert synth["date"].max() == end
 
 
 def test_synthetic_generator_deprecated_freq():
