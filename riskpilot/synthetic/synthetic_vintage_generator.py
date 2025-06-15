@@ -38,7 +38,7 @@ class LookAhead:
         ignore_cols: Optional[Sequence[str]] = None,
         random_state: int | None = None,
         custom_noise: Optional[Dict[str, Dict[str, Any]]] = None,
-        unclear_date_strategy: str = "start",
+        unclear_date_strategy: str = "end",
         int_date_format: Optional[Dict[str, str]] = None,
     ):
         self.id_cols = set(id_cols)
