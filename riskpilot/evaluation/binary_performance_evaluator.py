@@ -1812,8 +1812,40 @@ class BinaryPerformanceEvaluator:
         normalize: bool = False,
         cmap: str = "Blues",
         save: bool = False,
-    ) -> tuple[list[go.Figure] | go.Figure, dict[str, Any]]:
-        """Visualize contract migration between GHs using Sankey diagrams."""
+        raise_on_empty: bool = True,
+    ) -> (
+        tuple[list[go.Figure] | go.Figure, dict[str, Any]]
+        | tuple[None, dict[str, Any]]
+    ):
+        """Visualize contract migration between GHs using Sankey diagrams.
+
+        Parameters
+        ----------
+        start_period, end_period
+            Periods in ``YYYYMM`` or ``YYYY-MM`` format.
+        period_to_period
+            If ``True`` generate a diagram for each consecutive period between
+            ``start_period`` and ``end_period``. Otherwise a single net diagram
+            is returned.
+        money_col
+            Optional column with monetary value to aggregate. When ``None`` the
+            number of contracts is used.
+        top_n
+            Keep only the ``top_n`` flows by value, grouping the remainder as
+            ``Other``.
+        normalize
+            If ``True`` flows are expressed as percentages of the originating
+            group.
+        cmap
+            Colour map used for the node palette.
+        save
+            When ``True`` and ``save_dir`` was provided, images are written to
+            disk.
+        raise_on_empty
+            When ``True`` (default) a :class:`ValueError` is raised if no flows
+            are found between the selected periods. If ``False`` an empty result
+            ``(None, {})`` is returned instead.
+        """
 
         import numpy as np
         import pandas as pd
@@ -1823,6 +1855,11 @@ class BinaryPerformanceEvaluator:
 
         if self.date_col is None:
             raise ValueError("`date_col` é obrigatório para plot_sankey_migration().")
+
+        df_all = self.data_.copy()
+        df_all[self.date_col] = pd.to_datetime(df_all[self.date_col]).dt.to_period("M")
+        if df_all[self.date_col].isna().any():
+            raise ValueError("date_col contains NaT values – check parsing.")
 
         gh_col = next(
             (
@@ -1836,9 +1873,9 @@ class BinaryPerformanceEvaluator:
             raise ValueError("Group column não encontrado para Sankey.")
 
         id_col = self.id_cols[0]
-
-        df_all = self.data_.copy()
-        df_all[self.date_col] = pd.to_datetime(df_all[self.date_col]).dt.to_period("M")
+        if df_all[gh_col].isna().any():
+            raise ValueError("gh_col has missing values; compute groups first.")
+        df_all[id_col] = df_all[id_col].astype(str)
 
         start_p = pd.Period(str(start_period), freq="M")
         end_p = pd.Period(str(end_period), freq="M")
@@ -1875,9 +1912,20 @@ class BinaryPerformanceEvaluator:
 
         def _one_sankey(
             p1: pd.Period, p2: pd.Period
-        ) -> tuple[go.Figure, dict[str, Any]]:
-            df_start = df_all[df_all[self.date_col] == p1]
-            df_end = df_all[df_all[self.date_col] == p2][[id_col, gh_col]]
+        ) -> tuple[go.Figure | None, dict[str, Any]]:
+            df_start = df_all[df_all[self.date_col] == p1].copy()
+            df_end = df_all[df_all[self.date_col] == p2][[id_col, gh_col]].copy()
+
+            df_start[id_col] = df_start[id_col].astype(str)
+            df_end[id_col] = df_end[id_col].astype(str)
+
+            logger.info(
+                "Period %s: %d contracts, Period %s: %d contracts",
+                p1,
+                len(df_start),
+                p2,
+                len(df_end),
+            )
 
             cross = (
                 df_start.merge(df_end, on=id_col, suffixes=("_start", "_end"))
@@ -1887,6 +1935,18 @@ class BinaryPerformanceEvaluator:
                     columns={f"{gh_col}_start": "gh_start", f"{gh_col}_end": "gh_end"}
                 )
             )
+
+            logger.info("After merge: %d flows", len(cross))
+
+            if cross.empty:
+                msg = (
+                    f"No migrations found between {p1.strftime('%Y-%m')} and {p2.strftime('%Y-%m')}. "
+                    "Verify id_col overlap and homogeneous groups."
+                )
+                if raise_on_empty:
+                    raise ValueError(msg)
+                logger.warning(msg)
+                return None, {}
 
             if normalize and not cross.empty:
                 cross["value"] = cross["value"] / cross.groupby("gh_start")[
@@ -1991,7 +2051,8 @@ class BinaryPerformanceEvaluator:
             for p1, p2 in zip(period_range[:-1], period_range[1:]):
                 logger.info("Gerando Sankey %s → %s", p1, p2)
                 fig, met = _one_sankey(p1, p2)
-                fig_list.append(fig)
+                if fig is not None:
+                    fig_list.append(fig)
                 metrics_dict[f"{p1.strftime('%Y%m')}->{p2.strftime('%Y%m')}"] = met
             return fig_list, metrics_dict
 
