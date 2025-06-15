@@ -63,6 +63,14 @@ evaluator.plot_ks()
 
 # Visualizar resultados numéricos
 print(metrics)
+
+# Gerar cenário de stress
+stress = evaluator.run_stress_test(
+    n_periods=36,
+    freq="ME",
+    scenario="stress",
+)
+print(stress["metrics"])
 ```
 
 ---

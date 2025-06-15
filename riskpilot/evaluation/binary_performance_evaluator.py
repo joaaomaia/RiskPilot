@@ -32,7 +32,12 @@ evaluator.plot_event_rate()
 evaluator.plot_psi(reference_last_period=True)
 evaluator.plot_ks()
 
-print(evaluator.report)           # full dict of results
+stress = evaluator.run_stress_test(
+    n_periods=36,
+    freq="ME",
+    scenario="stress",
+)
+print(stress["metrics"])
 """
 
 from __future__ import annotations
@@ -125,6 +130,19 @@ class BinaryPerformanceEvaluator:
         Probability cutoff used to convert scores into class labels.
     homogeneous_group : str | int | pd.Series | np.ndarray | None, default "auto"
         Strategy to create homogeneous groups. See :meth:`plot_group_radar`.
+    stress_n_periods : int, default 12
+        Default horizon for :meth:`run_stress_test`.
+    stress_freq : str, default "M"
+        Frequency of synthetic vintages.
+    stress_scenario : {"base", "stress"}, default "stress"
+        Intensity of random noise for generated data.
+    stress_eval_funcs : sequence of str, optional
+        Methods executed during :meth:`run_stress_test`.
+
+    Deprecated Parameters
+    ---------------------
+    stress_periods : int, optional
+        Use ``stress_n_periods`` instead.
 
     Notes
     -----
@@ -150,8 +168,9 @@ class BinaryPerformanceEvaluator:
         threshold: float = 0.5,
         homogeneous_group: Optional[Union[str, int, pd.Series, np.ndarray]] = "auto",
         synthetic_gen: LookAhead | None = None,
-        stress_periods: int = 12,
+        stress_n_periods: int = 12,
         stress_freq: str = "M",
+        stress_periods: int | None = None,
         stress_scenario: Literal["base", "stress"] = "stress",
         stress_eval_funcs: Sequence[str] = (
             "compute_metrics",
@@ -159,6 +178,14 @@ class BinaryPerformanceEvaluator:
             "plot_ks",
         ),
     ) -> None:
+        if stress_periods is not None:
+            warnings.warn(
+                "'stress_periods' is deprecated, use 'stress_n_periods'",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            stress_n_periods = stress_periods
+
         self.model = self._load_model(model)
         self.df_train = df_train.copy()
         self.df_test = df_test.copy()
@@ -170,7 +197,7 @@ class BinaryPerformanceEvaluator:
         self.threshold = threshold
         self.homogeneous_group = homogeneous_group
         self.synthetic_gen = synthetic_gen
-        self.stress_periods = stress_periods
+        self.stress_n_periods = stress_n_periods
         self.stress_freq = stress_freq
         self.stress_scenario = stress_scenario
         self.stress_eval_funcs = list(stress_eval_funcs)
@@ -271,19 +298,62 @@ class BinaryPerformanceEvaluator:
 
         return metrics_df
 
-    def run_stress_test(self) -> Dict[str, Any]:
-        """Generate synthetic vintages and evaluate stress metrics."""
+    def run_stress_test(
+        self,
+        *,
+        n_periods: int | None = None,
+        freq: str | None = None,
+        scenario: str | None = None,
+        start_vintage: str | pd.Timestamp | None = None,
+        end_vintage: str | pd.Timestamp | None = None,
+        align_with_history: bool = True,
+        skip_train_overlap: bool = True,
+        shocks: dict | None = None,
+    ) -> Dict[str, Any]:
+        """Generate synthetic vintages and evaluate stress metrics.
+
+        Parameters
+        ----------
+        n_periods : int, optional
+            Number of periods to generate. ``None`` → ``self.stress_n_periods``.
+        freq : str, optional
+            Frequency passed to :meth:`LookAhead.generate`. ``None`` → ``self.stress_freq``.
+        scenario : str, optional
+            Overrides :pyattr:`self.stress_scenario` when provided.
+        start_vintage, end_vintage : str | pd.Timestamp, optional
+            Boundaries for generation. With ``align_with_history=True`` and
+            ``start_vintage`` omitted, the first vintage begins immediately
+            after the maximum ``date_cols`` seen during :meth:`LookAhead.fit`.
+        align_with_history : bool, default True
+            Guarantee temporal continuity with the historical data.
+        skip_train_overlap : bool, default True
+            Prevent overlap with the training set when aligning with history.
+        shocks : dict, optional
+            Column‑level shocks forwarded to :meth:`LookAhead.generate`.
+
+        Returns
+        -------
+        Dict[str, Any]
+            Metrics and paths for the generated artifacts.
+        """
         if self.synthetic_gen is None:
             raise ValueError("synthetic_gen is required for stress testing")
 
         logger = logging.getLogger("riskpilot")
         logger.info("Running stress test")
 
+        n_periods = n_periods if n_periods is not None else self.stress_n_periods
+        freq = freq if freq is not None else self.stress_freq
+
         df_synth = self.synthetic_gen.generate(
-            n_periods=self.stress_periods,
-            freq=self.stress_freq,
-            scenario=self.stress_scenario,
-            align_with_history=False,
+            n_periods=n_periods,
+            freq=freq,
+            scenario=scenario or self.stress_scenario,
+            start_vintage=start_vintage,
+            end_vintage=end_vintage,
+            align_with_history=align_with_history,
+            skip_train_overlap=skip_train_overlap,
+            shocks=shocks,
         )
 
         run_id = uuid.uuid4().hex
