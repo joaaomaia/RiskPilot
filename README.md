@@ -28,6 +28,7 @@ pip install riskpilot
 ```bash
 # Optional visualization
 pip install riskpilot[viz]
+pip install kaleido  # required for saving Plotly figures as images
 ```
 
 ---
