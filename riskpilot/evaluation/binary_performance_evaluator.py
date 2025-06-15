@@ -764,7 +764,21 @@ class BinaryPerformanceEvaluator:
         ]
 
         psi_records: List[Dict[str, Any]] = []
+
+        # --------------------------------------------
+        # lista inicial de variáveis
         variables = [feature] if feature else self._psi_variables()
+
+        # 🔒 remove colunas internas de score/label
+        forbidden = {self.score_col_, self.label_col_}
+        variables = [v for v in variables if v not in forbidden]
+
+        # se o usuário pediu exatamente uma variável proibida, avise
+        if feature in forbidden:
+            raise ValueError(
+                f"'{feature}' é coluna interna (score/label) e não deve ser usada para PSI."
+            )
+        # --------------------------------------------
 
         # -------- global_edges (referência train) ------
         global_edges: Dict[str, np.ndarray] = {}
@@ -1188,7 +1202,7 @@ class BinaryPerformanceEvaluator:
         # linha de referência 0.20
         fig.add_hline(
             y=0.20,
-            line=dict(color="gray", dash="dash"),
+            line=dict(color="gray", dash="dash", width=1),
             annotation_text="0.20",
             annotation_position="top right",
         )
@@ -1197,6 +1211,7 @@ class BinaryPerformanceEvaluator:
             title=title or "KS por Safra",
             xaxis_title="Safra",
             yaxis_title="KS",
+            yaxis_tickformat=".2f",
             xaxis=dict(showgrid=False),
             yaxis=dict(showgrid=False, range=[0, max(0.05, ks_df['KS'].max() * 1.1)]),
             template="plotly_white",
@@ -1207,75 +1222,504 @@ class BinaryPerformanceEvaluator:
 
         return fig
 
+    # def plot_group_radar(
+    #     self,
+    #     features: List[str] | None = None,
+    #     *,
+    #     scaler: Literal["zscore", "minmax"] = "zscore",
+    #     save: bool = False,
+    #     title: str = "",
+    # ) -> go.Figure:
+    #     """Radar chart das médias por grupo, com grupos de maior risco por cima."""
+    #     if self.group_ is None:
+    #         raise ValueError("Homogeneous groups were not computed.")
+
+    #     self._compute_group_palette()
+    #     df = self.data_.copy()
+
+    #     # ---------- seleção de features numéricas ----------
+    #     if features is None:
+    #         numeric_predictors = [
+    #             c for c in self.predictor_cols if pd.api.types.is_numeric_dtype(df[c])
+    #         ]
+    #         features = numeric_predictors
+    #     if not features:
+    #         raise ValueError("No numeric features available for radar plot.")
+
+    #     # ---------- escalonamento ----------
+    #     if scaler == "zscore":
+    #         scaled = df[features].apply(lambda x: (x - x.mean()) / x.std(ddof=0))
+    #     else:
+    #         scaled = df[features].apply(lambda x: (x - x.min()) / (x.max() - x.min()))
+
+    #     # ---------- média por grupo ----------
+    #     mean_by_group = scaled.groupby(df[self.group_col_])[features].mean()
+
+    #     # ---------- ordena grupos por event-rate ----------
+    #     event_rate = (
+    #         df.groupby(self.group_col_)[self.target_col].mean().sort_values()
+    #     )  # ascendente
+    #     ordered_groups = list(event_rate.index)  # do menor (azul) ao maior (vermelho)
+
+    #     # ---------- gráfico ----------
+    #     fig = go.Figure()
+    #     for group_id in ordered_groups:
+    #         row = mean_by_group.loc[group_id]
+    #         theta = features + [features[0]]             # fecha polígono
+    #         r = row.tolist() + [row.iloc[0]]
+
+    #         fig.add_trace(
+    #             go.Scatterpolar(
+    #                 r=r,
+    #                 theta=theta,
+    #                 fill="toself",
+    #                 name=f"Group {group_id}",
+    #                 line=dict(color=_rgba(self.group_palette_.get(group_id), 0.8)),
+    #                 fillcolor=_rgba(self.group_palette_.get(group_id), 0.3),
+    #             )
+    #         )
+
+    #     fig.update_layout(
+    #         template="plotly_white",
+    #         title=title or "Group Radar",
+    #         polar=dict(radialaxis=dict(visible=False)),
+    #         showlegend=True,
+    #     )
+
+    #     if save and self.save_dir:
+    #         fig.write_image(str(self.save_dir / "group_radar.png"))
+
+    #     return fig
+
 
     def plot_group_radar(
         self,
-        features: List[str] | None = None,
         *,
+        groups: list[int] | None = None,
+        separated: bool = False,
+        splits: list[str] | None = None,
         scaler: Literal["zscore", "minmax"] = "zscore",
+        animation: bool = False,
         save: bool = False,
         title: str = "",
-    ) -> go.Figure:
-        """Radar chart das médias por grupo, com grupos de maior risco por cima."""
+    ) -> Union[go.Figure, Dict[int, go.Figure]]:
+        """Radar chart das médias das *features* por Grupo Homogêneo (GH).
+
+        Novidades
+        ---------
+        • Escala do eixo *radial* agora é **fixa** para todos os gráficos,
+        evitando “encolher/esticar” quando GHs mudam.  
+        • Todos os gráficos usam **height = 800** e **width = 1200**.  
+        • Hover mostra Split e Volume; eixo radial oculto.
+        """
+
+        import pandas as pd, numpy as np, plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+
+        # ------------------- validações -------------------
         if self.group_ is None:
             raise ValueError("Homogeneous groups were not computed.")
+        if animation and self.date_col is None:
+            raise ValueError("`date_col` é necessário para animation=True.")
 
-        self._compute_group_palette()
-        df = self.data_.copy()
+        # ------------ mapeia GH ↔ número ordenado ----------
+        br = (
+            self.data_.groupby(self.group_col_)[self.target_col]
+            .mean()
+            .sort_values(ascending=False)
+        )
+        gh_order  = list(br.index)                # pior → melhor
+        gh_to_num = {g: i + 1 for i, g in enumerate(gh_order)}
+        num_to_gh = {v: k for k, v in gh_to_num.items()}
 
-        # ---------- seleção de features numéricas ----------
-        if features is None:
-            numeric_predictors = [
-                c for c in self.predictor_cols if pd.api.types.is_numeric_dtype(df[c])
-            ]
-            features = numeric_predictors
-        if not features:
-            raise ValueError("No numeric features available for radar plot.")
-
-        # ---------- escalonamento ----------
-        if scaler == "zscore":
-            scaled = df[features].apply(lambda x: (x - x.mean()) / x.std(ddof=0))
+        if groups is None:
+            groups_num = list(range(1, len(gh_order) + 1))
         else:
-            scaled = df[features].apply(lambda x: (x - x.min()) / (x.max() - x.min()))
+            groups_num = [g for g in groups if g in num_to_gh]
+        groups_int = [num_to_gh[g] for g in groups_num]
 
-        # ---------- média por grupo ----------
-        mean_by_group = scaled.groupby(df[self.group_col_])[features].mean()
+        # -------------------- splits ----------------------
+        all_splits = {"train": self.df_train, "test": self.df_test}
+        if self.df_val is not None:
+            all_splits["val"] = self.df_val
+        if splits is None:
+            splits = list(all_splits.keys())
+        splits = [s.lower() for s in splits if s.lower() in all_splits]
 
-        # ---------- ordena grupos por event-rate ----------
-        event_rate = (
-            df.groupby(self.group_col_)[self.target_col].mean().sort_values()
-        )  # ascendente
-        ordered_groups = list(event_rate.index)  # do menor (azul) ao maior (vermelho)
+        feats = [
+            c for c in self.predictor_cols
+            if pd.api.types.is_numeric_dtype(self.data_[c])
+        ]
 
-        # ---------- gráfico ----------
-        fig = go.Figure()
-        for group_id in ordered_groups:
-            row = mean_by_group.loc[group_id]
-            theta = features + [features[0]]             # fecha polígono
-            r = row.tolist() + [row.iloc[0]]
+        # ------------- escalonamento helper ---------------
+        def _scale(df):
+            if scaler == "zscore":
+                return df[feats].apply(lambda x: (x - x.mean()) / x.std(ddof=0))
+            return df[feats].apply(lambda x: (x - x.min()) / (x.max() - x.min()))
 
-            fig.add_trace(
-                go.Scatterpolar(
-                    r=r,
-                    theta=theta,
-                    fill="toself",
-                    name=f"Group {group_id}",
-                    line=dict(color=_rgba(self.group_palette_.get(group_id), 0.8)),
-                    fillcolor=_rgba(self.group_palette_.get(group_id), 0.3),
-                )
+        # ---------------- escala global -------------------
+        scaled_global = _scale(self.data_)
+        r_min, r_max = scaled_global[feats].min().min(), scaled_global[feats].max().max()
+
+        # ---------------- volume helper -------------------
+        def _vol(df, g_int):
+            return int(df[df[self.group_col_] == g_int].shape[0])
+
+        # ==================================================
+        #                 animação mensal
+        # ==================================================
+        if animation:
+            periods = (
+                pd.to_datetime(self.data_[self.date_col])
+                .dt.to_period("M").sort_values().unique()
+            )
+            if not len(periods):
+                raise ValueError("Nenhum período para animação.")
+
+            n_gh = len(groups_int)
+            fig = make_subplots(
+                rows=1, cols=n_gh,
+                specs=[[{"type": "polar"}]*n_gh],
+                subplot_titles=[f"GH{n}" for n in groups_num],
             )
 
-        fig.update_layout(
-            template="plotly_white",
-            title=title or "Group Radar",
-            polar=dict(radialaxis=dict(visible=False)),
-            showlegend=True,
-        )
+            def _frame(per):
+                traces = []
+                for idx, (g_int, g_num) in enumerate(zip(groups_int, groups_num), 1):
+                    theta = feats + [feats[0]]
+                    for split in splits:
+                        df_s = all_splits[split]
+                        mask = (pd.to_datetime(df_s[self.date_col]).dt.to_period("M") == per)
+                        df_s = df_s[mask]
+                        if df_s.empty or g_int not in df_s[self.group_col_].values:
+                            continue
+                        mean_row = _scale(df_s).groupby(
+                            df_s[self.group_col_])[feats].mean().loc[g_int]
+                        r_vals = mean_row.tolist() + [mean_row[feats[0]]]
+                        traces.append(go.Scatterpolar(
+                            r=r_vals, theta=theta, subplot=f"polar{idx}",
+                            name=f"GH{g_num} ({split})",
+                            line=dict(color=_rgba(self.group_palette_[g_int], .8)),
+                            fill="toself",
+                            fillcolor=_rgba(self.group_palette_[g_int], .25),
+                            customdata=[_vol(df_s, g_int)]*len(r_vals),
+                            hovertemplate=(
+                                f"Safra: {per.strftime('%Y%m')}<br>"
+                                f"Split: {split.capitalize()}<br>"
+                                "Volume: %{customdata:,}<extra></extra>"
+                            ),
+                            showlegend=False,
+                        ))
+                return traces
 
-        if save and self.save_dir:
-            fig.write_image(str(self.save_dir / "group_radar.png"))
+            frames = [go.Frame(data=_frame(per), name=per.strftime("%Y-%m")) for per in periods]
+            fig.add_traces(frames[0].data)
+            fig.frames = frames
 
-        return fig
+            # fixa escala
+            fig.update_layout(
+                **{f"polar{i}": dict(radialaxis=dict(visible=False, range=[r_min, r_max], fixedrange=True))
+                for i in range(1, n_gh+1)},
+                template="plotly_white",
+                title=title or "Evolução mensal",
+                height=800, width=1200,
+                updatemenus=[dict(
+                    type="buttons", direction="left", x=0.1, y=1.1,
+                    buttons=[
+                        dict(label="Play", method="animate",
+                            args=[None, {"frame": {"duration": 600, "redraw": True}, "fromcurrent": True}]),
+                        dict(label="Pause", method="animate",
+                            args=[[None], {"frame": {"duration": 0}, "mode": "immediate"}]),
+                    ])]
+            )
+            if save and self.save_dir:
+                fig.write_html(self.save_dir / "group_radar_animation.html")
+            return fig
+
+        # ==================================================
+        #              estáticos (combined / sep)
+        # ==================================================
+        mean_split = {s: _scale(df).groupby(df[self.group_col_])[feats].mean()
+                    for s, df in all_splits.items()}
+
+        def _polar_cfg(n):
+            return {f"polar{i}": dict(radialaxis=dict(visible=False, range=[r_min, r_max], fixedrange=True))
+                    for i in range(1, n+1)}
+
+        # -------- combinado ----------
+        if not separated:
+            n_cols = len(splits)
+            fig = make_subplots(rows=1, cols=n_cols,
+                                specs=[[{"type":"polar"}]*n_cols],
+                                subplot_titles=[s.capitalize() for s in splits])
+            for c, split in enumerate(splits, 1):
+                for g_int, g_num in zip(reversed(groups_int), reversed(groups_num)):
+                    if g_int not in mean_split[split].index:
+                        continue
+                    theta = feats + [feats[0]]
+                    r_vals = mean_split[split].loc[g_int].tolist()+[mean_split[split].loc[g_int,feats[0]]]
+                    fig.add_trace(go.Scatterpolar(
+                        r=r_vals, theta=theta, subplot=f"polar{c}",
+                        name=f"GH{g_num}",
+                        line=dict(color=_rgba(self.group_palette_[g_int], .8)),
+                        fill="toself", fillcolor=_rgba(self.group_palette_[g_int], .25),
+                        customdata=[_vol(all_splits[split], g_int)]*len(r_vals),
+                        hovertemplate=(
+                            f"GH{g_num}<br>Split: {split.capitalize()}<br>"
+                            "Volume: %{customdata:,}<extra></extra>"
+                        ),
+                    ), row=1, col=c)
+            fig.update_layout(
+                **_polar_cfg(n_cols),
+                template="plotly_white",
+                title=title or "Radar – GHs combinados",
+                height=800, width=1200,
+                legend_title="Grupos Homogêneos",
+            )
+            if save and self.save_dir:
+                fig.write_image(self.save_dir / "group_radar_combined.png")
+            return fig
+
+        # -------- separado ----------
+        figs = {}
+        for g_int, g_num in zip(groups_int, groups_num):
+            n_cols = len(splits)
+            fig = make_subplots(rows=1, cols=n_cols,
+                                specs=[[{"type":"polar"}]*n_cols],
+                                subplot_titles=[s.capitalize() for s in splits])
+            for c, split in enumerate(splits, 1):
+                if g_int not in mean_split[split].index:
+                    continue
+                theta = feats + [feats[0]]
+                r_vals = mean_split[split].loc[g_int].tolist()+[mean_split[split].loc[g_int,feats[0]]]
+                fig.add_trace(go.Scatterpolar(
+                    r=r_vals, theta=theta, subplot=f"polar{c}",
+                    name=f"GH{g_num}",
+                    line=dict(color=_rgba(self.group_palette_[g_int], .8)),
+                    fill="toself", fillcolor=_rgba(self.group_palette_[g_int], .25),
+                    customdata=[_vol(all_splits[split], g_int)]*len(r_vals),
+                    hovertemplate=(
+                        f"Split: {split.capitalize()}<br>"
+                        "Volume: %{customdata:,}<extra></extra>"
+                    ),
+                    showlegend=False,
+                ), row=1, col=c)
+            fig.update_layout(
+                **_polar_cfg(n_cols),
+                template="plotly_white",
+                title=f"{title or 'Radar'} – GH{g_num}",
+                height=800, width=1200,
+            )
+            figs[g_num] = fig
+            if save and self.save_dir:
+                fig.write_image(self.save_dir / f"radar_GH{g_num}.png")
+        return figs
+
+
+    # def plot_group_radar(
+    #     self,
+    #     *,
+    #     groups: list[int] | None = None,
+    #     separated: bool = False,
+    #     splits: list[str] | None = None,
+    #     scaler: Literal["zscore", "minmax"] = "zscore",
+    #     animation: bool = False,
+    #     save: bool = False,
+    #     title: str = "",
+    # ) -> Union[go.Figure, Dict[int, go.Figure]]:
+    #     """Radar chart das médias de features por GH.
+
+    #     Parâmetros
+    #     ----------
+    #     groups : list[int] | None
+    #         Lista com os números dos GHs desejados (GH1 = maior bad‑rate).
+    #         ``None`` => todos.
+    #     separated : bool
+    #         • False → 1 radar por split (Train/Test/Val).  
+    #         • True  → 1 radar por GH (cada radar pode conter vários splits).
+    #     splits : list[str] | None
+    #         Subconjunto de ``["train","test","val"]``. ``None`` => todos.
+    #     scaler : {"zscore","minmax"}
+    #         Método de normalização das features no radar.
+    #     animation : bool
+    #         Se ``True``, gera animação mensal (1 subplot por GH) sincronizada
+    #         pela coluna de data.
+    #     save : bool
+    #         Se ``True`` e ``self.save_dir`` definido, grava PNG/HTML (quando animado).
+    #     title : str
+    #         Título base da figura.
+    #     """
+
+    #     import pandas as pd, numpy as np, plotly.graph_objects as go
+    #     from plotly.subplots import make_subplots
+    #     from math import ceil
+
+    #     # ---------------- validações ----------------
+    #     if self.group_ is None:
+    #         raise ValueError("Homogeneous groups were not computed.")
+    #     if animation and self.date_col is None:
+    #         raise ValueError("`date_col` é necessário para animation=True.")
+
+    #     # ---------------- mapeia GH ------------------
+    #     br = (
+    #         self.data_.groupby(self.group_col_)[self.target_col]
+    #         .mean()
+    #         .sort_values(ascending=False)          # GH1 = pior
+    #     )
+    #     gh_order      = list(br.index)             # labels internos
+    #     gh_to_num     = {g: i + 1 for i, g in enumerate(gh_order)}
+    #     num_to_gh     = {v: k for k, v in gh_to_num.items()}
+
+    #     if groups is None:
+    #         groups_num = list(range(1, len(gh_order) + 1))
+    #     else:
+    #         groups_num = [g for g in groups if g in num_to_gh]
+    #     groups_int = [num_to_gh[g] for g in groups_num]
+
+    #     # ---------------- splits ---------------------
+    #     all_splits = {"train": self.df_train, "test": self.df_test}
+    #     if self.df_val is not None:
+    #         all_splits["val"] = self.df_val
+    #     if splits is None:
+    #         splits = list(all_splits.keys())
+    #     splits = [s.lower() for s in splits if s.lower() in all_splits]
+
+    #     # ---------------- features -------------------
+    #     feats = [
+    #         c for c in self.predictor_cols
+    #         if pd.api.types.is_numeric_dtype(self.data_[c])
+    #     ]
+
+    #     def _scale(df):
+    #         if scaler == "zscore":
+    #             return df[feats].apply(lambda x: (x - x.mean()) / x.std(ddof=0))
+    #         return df[feats].apply(lambda x: (x - x.min()) / (x.max() - x.min()))
+
+    #     def _vol(df, g_int):
+    #         return int(df[df[self.group_col_] == g_int].shape[0])
+
+    #     # =============== ANIMAÇÃO ====================
+    #     if animation:
+    #         periods = (
+    #             pd.to_datetime(self.data_[self.date_col])
+    #             .dt.to_period("M").sort_values().unique()
+    #         )
+    #         n_gh, n_cols = len(groups_int), min(3, len(groups_int))
+    #         n_rows = ceil(n_gh / n_cols)
+    #         specs  = [[{"type": "polar"}]*n_cols for _ in range(n_rows)]
+    #         fig = make_subplots(rows=n_rows, cols=n_cols,
+    #                             specs=specs,
+    #                             subplot_titles=[f"GH{n}" for n in groups_num])
+
+    #         # ---------------- frames ----------------
+    #         frames = []
+    #         for per in periods:
+    #             traces = []
+    #             for idx, (g_int, g_num) in enumerate(zip(groups_int, groups_num)):
+    #                 r_idx = idx//n_cols + 1; c_idx = idx % n_cols + 1
+    #                 theta = feats + [feats[0]]
+    #                 for split in splits:
+    #                     df_p = all_splits[split]
+    #                     mask = pd.to_datetime(df_p[self.date_col]).dt.to_period("M") == per
+    #                     df_p = df_p[mask]
+    #                     if df_p.empty or g_int not in df_p[self.group_col_].values:
+    #                         continue
+    #                     mean_row = _scale(df_p).groupby(
+    #                         df_p[self.group_col_])[feats].mean().loc[g_int]
+    #                     r_vals = mean_row.tolist() + [mean_row[feats[0]]]
+    #                     traces.append(go.Scatterpolar(
+    #                         r=r_vals, theta=theta,
+    #                         subplot=f"polar{r_idx}{c_idx}",
+    #                         name=f"GH{g_num} – {split.capitalize()}",
+    #                         line=dict(color=_rgba(self.group_palette_[g_int], .8)),
+    #                         fill="toself",
+    #                         fillcolor=_rgba(self.group_palette_[g_int], .25),
+    #                         customdata=[_vol(df_p, g_int)]*len(r_vals),
+    #                         hovertemplate=(f"Safra: {per:%Y%m}<br>"
+    #                                     f"GH{g_num} – {split.capitalize()}<br>"
+    #                                     "Volume: %{customdata:,}<extra></extra>"),
+    #                         showlegend=False,
+    #                     ))
+    #             frames.append(go.Frame(data=traces, name=per.strftime("%Y-%m")))
+
+    #         if frames:
+    #             fig.add_traces(frames[0].data); fig.frames = frames
+    #         fig.update_layout(
+    #             template="plotly_white", title=title or "Evolução mensal",
+    #             height=800*n_rows, width=1200*n_cols,
+    #             polar=dict(radialaxis=dict(visible=False)),
+    #             updatemenus=[dict(type="buttons", buttons=[
+    #                 dict(label="Play",  method="animate",
+    #                     args=[None, {"frame": {"duration": 600, "redraw": True},
+    #                                 "fromcurrent": True}]),
+    #                 dict(label="Pause", method="animate",
+    #                     args=[[None], {"frame": {"duration": 0},
+    #                                     "mode": "immediate"}]),
+    #             ])])
+    #         if save and self.save_dir:
+    #             fig.write_html(self.save_dir/"group_radar_animation.html")
+    #         return fig
+
+    #     # =============== DADOS ESTÁTICOS ==============
+    #     mean_split = {s: _scale(df).groupby(df[self.group_col_])[feats].mean()
+    #                 for s,df in all_splits.items()}
+
+    #     # ---------- combined (1 radar / split) --------
+    #     if not separated:
+    #         n_cols = len(splits)
+    #         fig = make_subplots(rows=1, cols=n_cols,
+    #                             specs=[[{"type": "polar"}]*n_cols],
+    #                             subplot_titles=[s.capitalize() for s in splits])
+
+    #         for c, split in enumerate(splits, 1):
+    #             for g_int, g_num in zip(reversed(groups_int), reversed(groups_num)):
+    #                 if g_int not in mean_split[split].index: continue
+    #                 theta = feats + [feats[0]]
+    #                 r = mean_split[split].loc[g_int].tolist()+[mean_split[split].loc[g_int,feats[0]]]
+    #                 fig.add_trace(go.Scatterpolar(
+    #                     r=r, theta=theta, subplot=f"polar{c}",
+    #                     name=f"GH{g_num}",
+    #                     line=dict(color=_rgba(self.group_palette_[g_int], .8)),
+    #                     fill="toself", fillcolor=_rgba(self.group_palette_[g_int], .25),
+    #                     customdata=[_vol(all_splits[split], g_int)]*len(r),
+    #                     hovertemplate=f"GH{g_num}<br>Volume: %{{customdata:,}}<extra></extra>"
+    #                 ), row=1, col=c)
+
+    #         fig.update_layout(
+    #             template="plotly_white", title=title or "Radar – GHs combinados",
+    #             height=800, width=1200*n_cols,
+    #             legend_title="Grupos Homogêneos")
+    #         if save and self.save_dir:
+    #             fig.write_image(self.save_dir/"group_radar_combined.png")
+    #         return fig
+
+    #     # ---------- separated (dict GH → Figure) ------
+    #     figs = {}
+    #     for g_int, g_num in zip(groups_int, groups_num):
+    #         fig = make_subplots(rows=1, cols=len(splits),
+    #                             specs=[[{"type": "polar"}]*len(splits)],
+    #                             subplot_titles=[s.capitalize() for s in splits])
+    #         for c, split in enumerate(splits, 1):
+    #             if g_int not in mean_split[split].index: continue
+    #             theta = feats+[feats[0]]
+    #             r = mean_split[split].loc[g_int].tolist()+[mean_split[split].loc[g_int,feats[0]]]
+    #             fig.add_trace(go.Scatterpolar(
+    #                 r=r, theta=theta, subplot=f"polar{c}",
+    #                 name=split.capitalize(),
+    #                 line=dict(color=_rgba(self.group_palette_[g_int], .8)),
+    #                 fill="toself", fillcolor=_rgba(self.group_palette_[g_int], .25),
+    #                 customdata=[_vol(all_splits[split], g_int)]*len(r),
+    #                 hovertemplate=(f"GH{g_num} – {split.capitalize()}<br>"
+    #                             "Volume: %{customdata:,}<extra></extra>"),
+    #             ), row=1, col=c)
+    #         fig.update_layout(
+    #             template="plotly_white", title=f"{title or 'Radar'} – GH{g_num}",
+    #             height=800, width=1200*len(splits),
+    #             showlegend=False)
+    #         figs[g_num] = fig
+    #         if save and self.save_dir:
+    #             fig.write_image(self.save_dir/f"radar_GH{g_num}.png")
+    #     return figs
 
 
 
