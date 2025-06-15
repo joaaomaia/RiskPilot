@@ -305,7 +305,15 @@ class BinaryPerformanceEvaluator:
             out = func()
             if isinstance(out, go.Figure):
                 fig_path = art_dir / f"{name}.png"
-                out.write_image(fig_path)
+                try:
+                    out.write_image(fig_path)
+                except ValueError as err:
+                    if "kaleido" in str(err).lower():
+                        raise RuntimeError(
+                            "Plotly image export requires the 'kaleido' package. "
+                            "Install it with 'pip install kaleido'."
+                        ) from err
+                    raise
                 results[name] = str(fig_path)
             else:
                 results[name] = out
