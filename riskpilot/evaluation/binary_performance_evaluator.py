@@ -271,8 +271,6 @@ class BinaryPerformanceEvaluator:
 
         return metrics_df
 
-
-
     def run_stress_test(self) -> Dict[str, Any]:
         """Generate synthetic vintages and evaluate stress metrics."""
         if self.synthetic_gen is None:
@@ -326,7 +324,6 @@ class BinaryPerformanceEvaluator:
     def binning_table(self) -> Any | None:
         """Return the binning table used for homogeneous groups."""
         return self.binning_table_
-
 
     def plot_confusion(
         self,
@@ -476,7 +473,6 @@ class BinaryPerformanceEvaluator:
 
         return fig
 
-
     def plot_calibration(
         self,
         *,
@@ -564,7 +560,6 @@ class BinaryPerformanceEvaluator:
             fig.show()
 
         return fig
-
 
     def plot_event_rate(
         self,
@@ -704,7 +699,6 @@ class BinaryPerformanceEvaluator:
             fig_share.write_image(self.save_dir / "group_share.png")
 
         return fig_rate, fig_share
-
 
     def plot_psi(
         self,
@@ -885,7 +879,6 @@ class BinaryPerformanceEvaluator:
                     annotation_position="top right",
                     annotation_font_color=color,
                 )
-
 
             fig.update_layout(
                 title=(title or f"PSI ao longo do tempo – {var}"),
@@ -1162,7 +1155,7 @@ class BinaryPerformanceEvaluator:
     #     )
     #     if save and self.save_dir:
     #         fig.write_image(str(self.save_dir / "psi_over_time.png"))
-        
+
     #     #fig.show()
     #     return fig, psi_df
 
@@ -1338,7 +1331,6 @@ class BinaryPerformanceEvaluator:
     #         fig.write_image(str(self.save_dir / "group_radar.png"))
 
     #     return fig
-
 
     def plot_group_radar(
         self,
@@ -1577,7 +1569,6 @@ class BinaryPerformanceEvaluator:
                 fig.write_image(self.save_dir / f"radar_GH{g_num}.png")
         return figs
 
-
     # def plot_group_radar(
     #     self,
     #     *,
@@ -1597,7 +1588,7 @@ class BinaryPerformanceEvaluator:
     #         Lista com os números dos GHs desejados (GH1 = maior bad‑rate).
     #         ``None`` => todos.
     #     separated : bool
-    #         • False → 1 radar por split (Train/Test/Val).  
+    #         • False → 1 radar por split (Train/Test/Val).
     #         • True  → 1 radar por GH (cada radar pode conter vários splits).
     #     splits : list[str] | None
     #         Subconjunto de ``["train","test","val"]``. ``None`` => todos.
@@ -1783,8 +1774,6 @@ class BinaryPerformanceEvaluator:
     #             fig.write_image(self.save_dir/f"radar_GH{g_num}.png")
     #     return figs
 
-
-
     def plot_decile_ks(
         self,
         *,
@@ -1811,6 +1800,204 @@ class BinaryPerformanceEvaluator:
             **kwargs,
         )
         return fig
+
+    def plot_sankey_migration(
+        self,
+        start_period: int | str,
+        end_period: int | str,
+        *,
+        period_to_period: bool = True,
+        money_col: str | None = None,
+        top_n: int | None = None,
+        normalize: bool = False,
+        cmap: str = "Blues",
+        save: bool = False,
+    ) -> tuple[list[go.Figure] | go.Figure, dict[str, Any]]:
+        """Visualize contract migration between GHs using Sankey diagrams."""
+
+        import numpy as np
+        import pandas as pd
+        import plotly.graph_objects as go
+
+        logger = logging.getLogger("riskpilot")
+
+        if self.date_col is None:
+            raise ValueError("`date_col` é obrigatório para plot_sankey_migration().")
+
+        gh_col = next(
+            (
+                c
+                for c in [self.group_col, self.group_col_]
+                if c and c in self.data_.columns
+            ),
+            None,
+        )
+        if gh_col is None:
+            raise ValueError("Group column não encontrado para Sankey.")
+
+        id_col = self.id_cols[0]
+
+        df_all = self.data_.copy()
+        df_all[self.date_col] = pd.to_datetime(df_all[self.date_col]).dt.to_period("M")
+
+        start_p = pd.Period(str(start_period), freq="M")
+        end_p = pd.Period(str(end_period), freq="M")
+
+        periods = df_all[self.date_col].unique()
+        if start_p not in periods or end_p not in periods:
+            raise ValueError("start_period ou end_period ausente em self.data_.")
+
+        self._compute_group_palette()
+
+        br = df_all.groupby(gh_col)[self.target_col].mean().sort_values(ascending=False)
+        gh_to_label = {g: f"GH{i+1}" for i, g in enumerate(br.index)}
+
+        def _historical_means() -> pd.Series:
+            flows = []
+            ordered = sorted(periods)
+            for p1, p2 in zip(ordered[:-1], ordered[1:]):
+                d1 = df_all[df_all[self.date_col] == p1]
+                d2 = df_all[df_all[self.date_col] == p2][[id_col, gh_col]]
+                tmp = (
+                    d1.merge(d2, on=id_col, suffixes=("_start", "_end"))
+                    .groupby([f"{gh_col}_start", f"{gh_col}_end"], as_index=False)
+                    .agg(value=(money_col, "sum") if money_col else (id_col, "count"))
+                )
+                flows.append(tmp)
+            if flows:
+                hist = pd.concat(flows, ignore_index=True)
+                return hist.groupby([f"{gh_col}_start", f"{gh_col}_end"])[
+                    "value"
+                ].mean()
+            return pd.Series(dtype=float)
+
+        hist_means = _historical_means()
+
+        def _one_sankey(
+            p1: pd.Period, p2: pd.Period
+        ) -> tuple[go.Figure, dict[str, Any]]:
+            df_start = df_all[df_all[self.date_col] == p1]
+            df_end = df_all[df_all[self.date_col] == p2][[id_col, gh_col]]
+
+            cross = (
+                df_start.merge(df_end, on=id_col, suffixes=("_start", "_end"))
+                .groupby([f"{gh_col}_start", f"{gh_col}_end"], as_index=False)
+                .agg(value=(money_col, "sum") if money_col else (id_col, "count"))
+                .rename(
+                    columns={f"{gh_col}_start": "gh_start", f"{gh_col}_end": "gh_end"}
+                )
+            )
+
+            if normalize and not cross.empty:
+                cross["value"] = cross["value"] / cross.groupby("gh_start")[
+                    "value"
+                ].transform("sum")
+
+            if top_n is not None and top_n < len(cross):
+                cross = cross.sort_values("value", ascending=False)
+                other_val = cross.iloc[top_n:]["value"].sum()
+                cross = cross.iloc[:top_n]
+                if other_val > 0:
+                    cross = pd.concat(
+                        [
+                            cross,
+                            pd.DataFrame(
+                                {
+                                    "gh_start": ["Other"],
+                                    "gh_end": ["Other"],
+                                    "value": [other_val],
+                                }
+                            ),
+                        ],
+                        ignore_index=True,
+                    )
+
+            nodes = (
+                pd.Index(cross["gh_start"].tolist() + cross["gh_end"].tolist())
+                .unique()
+                .tolist()
+            )
+            idx_map = {n: i for i, n in enumerate(nodes)}
+            labels = [gh_to_label.get(n, "Other") for n in nodes]
+            colors = [self.group_palette_.get(n, "lightgrey") for n in nodes]
+
+            fig = go.Figure(
+                go.Sankey(
+                    node=dict(label=labels, color=colors),
+                    link=dict(
+                        source=cross["gh_start"].map(idx_map),
+                        target=cross["gh_end"].map(idx_map),
+                        value=cross["value"],
+                    ),
+                )
+            )
+
+            title = (
+                f"GH Migration – {p1.strftime('%Y-%m')} → {p2.strftime('%Y-%m')}"
+                if period_to_period
+                else f"GH Migration – {start_p.strftime('%Y-%m')} ⟶ {end_p.strftime('%Y-%m')} (net)"
+            )
+            fig.update_layout(
+                template="plotly_white", title=title, height=800, width=1200
+            )
+
+            if save and self.save_dir:
+                fname = f"sankey_{p1.strftime('%Y%m')}_{p2.strftime('%Y%m')}.png"
+                fig.write_image(self.save_dir / fname)
+                fig.write_html(self.save_dir / fname.replace(".png", ".html"))
+
+            new_entries = df_end[~df_end[id_col].isin(df_start[id_col])][gh_col]
+            exits = df_start[~df_start[id_col].isin(df_end[id_col])][gh_col]
+
+            metrics = {
+                "new_entries": (
+                    gh_to_label.get(new_entries.value_counts().idxmax(), None)
+                    if not new_entries.empty
+                    else None
+                ),
+                "exits": (
+                    gh_to_label.get(exits.value_counts().idxmax(), None)
+                    if not exits.empty
+                    else None
+                ),
+                "common_flow": None,
+                "outlier_flow": None,
+            }
+
+            if not cross.empty:
+                pair = cross.sort_values("value", ascending=False).iloc[0]
+                metrics["common_flow"] = (
+                    gh_to_label.get(pair["gh_start"]),
+                    gh_to_label.get(pair["gh_end"]),
+                )
+
+                if not hist_means.empty:
+                    cur = cross.set_index(["gh_start", "gh_end"])["value"]
+                    comp = hist_means.reindex(cur.index)
+                    diff = (cur - comp).abs()
+                    if not diff.isna().all():
+                        max_pair = diff.idxmax()
+                        metrics["outlier_flow"] = (
+                            gh_to_label.get(max_pair[0]),
+                            gh_to_label.get(max_pair[1]),
+                        )
+
+            return fig, metrics
+
+        if period_to_period:
+            period_range = pd.period_range(start_p, end_p, freq="M")
+            fig_list: list[go.Figure] = []
+            metrics_dict: dict[str, Any] = {}
+            for p1, p2 in zip(period_range[:-1], period_range[1:]):
+                logger.info("Gerando Sankey %s → %s", p1, p2)
+                fig, met = _one_sankey(p1, p2)
+                fig_list.append(fig)
+                metrics_dict[f"{p1.strftime('%Y%m')}->{p2.strftime('%Y%m')}"] = met
+            return fig_list, metrics_dict
+
+        logger.info("Gerando Sankey %s ⟶ %s", start_p, end_p)
+        fig, metrics_single = _one_sankey(start_p, end_p)
+        return fig, metrics_single
 
     ## ---------- helpers ----------
     def _load_model(self, model: Union[str, Path, object]):
