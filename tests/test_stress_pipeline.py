@@ -1,5 +1,6 @@
 from importlib.util import find_spec
 
+import numpy as np
 import pandas as pd
 import pytest
 from sklearn.datasets import make_classification
@@ -18,6 +19,7 @@ def test_run_stress_pipeline(tmp_path):
     df["target"] = y
     df["id"] = range(100)
     df["date"] = pd.date_range("2020-01-01", periods=100)
+    df["grp"] = np.where(np.arange(len(df)) % 2 == 0, "A", "B")
 
     train = df.iloc[:80].reset_index(drop=True)
     test = df.iloc[80:].reset_index(drop=True)
@@ -34,9 +36,11 @@ def test_run_stress_pipeline(tmp_path):
         target_col="target",
         id_cols=["id"],
         date_col="date",
+        group_col="grp",
         synthetic_gen=gen,
-        stress_periods=1,
+        stress_n_periods=1,
         stress_freq="D",
+        homogeneous_group=None,
     )
-    report = bev.run_stress_test()
+    report = bev.run_stress_test(n_periods=1, freq="D")
     assert "meta" in report and "sha256" in report["meta"]
