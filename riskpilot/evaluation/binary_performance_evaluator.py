@@ -330,6 +330,8 @@ class BinaryPerformanceEvaluator:
 
     def plot_confusion(
         self,
+        y_true: Sequence[int] | None = None,
+        y_pred_proba: Sequence[float] | None = None,
         *,
         threshold: float | str = 0.5,
         splits: list[str] | None = None,
@@ -341,11 +343,16 @@ class BinaryPerformanceEvaluator:
         title_prefix: str = "Matriz de Confusão",
     ):
         """
-        Desenha matrizes de confusão (Train/Test/Val) via seaborn,
-        calculando as probabilidades na hora, direto do modelo.
+        Desenha matrizes de confusão. Pode receber ``y_true`` e
+        ``y_pred_proba`` diretamente ou utilizar os splits internos
+        (train/test/val) do objeto.
 
         Parameters
         ----------
+        y_true, y_pred_proba : array-like, optional
+            Valores verdadeiros e probabilidades preditas para gerar uma única
+            matriz. Se omitidos, são utilizados os dados internos divididos em
+            ``splits``.
         threshold : float | {"ks","youden"}
             Cut-off fixo ou regra baseada no split Train.
         splits : list[str] | None
@@ -363,11 +370,11 @@ class BinaryPerformanceEvaluator:
         title_prefix : str
             Prefixo do título; o nome do split é acrescentado.
         """
-        import matplotlib.pyplot as plt
-        import seaborn as sns
-        from sklearn.metrics import confusion_matrix, roc_curve
         import numpy as np
         import pandas as pd
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+        from sklearn.metrics import confusion_matrix, roc_curve
 
         # ---------------- helpers ---------------- #
         def _pos_idx() -> int:
@@ -378,7 +385,38 @@ class BinaryPerformanceEvaluator:
             fpr, tpr, thr = roc_curve(y, p)
             return float(thr[np.nanargmax(tpr - fpr)])  # KS = Youden
 
-        # ---------------- splits ------------------ #
+        # ---------------- provided arrays ---------------- #
+        if y_true is not None and y_pred_proba is not None:
+            y_true = np.asarray(y_true)
+            y_pred_proba = np.asarray(y_pred_proba)
+            y_pred = (y_pred_proba >= float(threshold)).astype(int)
+            cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
+            cm_pct = cm / cm.sum()
+            heat = cm_pct if normalize else cm
+
+            fig = go.Figure(
+                data=go.Heatmap(
+                    z=heat,
+                    x=["Previsto 0", "Previsto 1"],
+                    y=["Real 0", "Real 1"],
+                    colorscale=cmap,
+                    zmin=0,
+                    zmax=heat.max() if heat.max() > 0 else 1,
+                    showscale=False,
+                )
+            )
+            fig.update_layout(title=title_prefix, template="plotly_white")
+
+            if save and self.save_dir:
+                fname = title_prefix.lower().replace(" ", "_") + ".png"
+                fig.write_image(self.save_dir / fname)
+
+            if display:
+                fig.show()
+
+            return fig
+
+        # ---------------- splits approach ---------------- #
         available = {"train": self.df_train, "test": self.df_test}
         if getattr(self, "df_val", None) is not None:
             available["val"] = self.df_val
@@ -391,7 +429,6 @@ class BinaryPerformanceEvaluator:
             if invalid:
                 raise ValueError(f"Splits inválidos: {invalid}")
 
-        # --------------- threshold ---------------- #
         pos_idx = _pos_idx()
         if isinstance(threshold, str):
             ref = available["train"]
@@ -399,58 +436,43 @@ class BinaryPerformanceEvaluator:
             thr_p = self.model.predict_proba(ref[self.predictor_cols])[:, pos_idx]
             threshold = _best_threshold(thr_y, thr_p, threshold.lower())
 
-        # -------------- subplots ------------------ #
         n = len(splits)
-        fig, axes = plt.subplots(
-            1, n, figsize=(figsize[0] * n, figsize[1]), squeeze=False
-        )
-        axes = axes.flatten()
+        fig = make_subplots(rows=1, cols=n, subplot_titles=[s.capitalize() for s in splits])
 
-        for ax, split in zip(axes, splits):
+        for c, split in enumerate(splits, 1):
             df_split = available[split]
+            y_true_s = df_split[self.target_col].values
+            y_proba_s = self.model.predict_proba(df_split[self.predictor_cols])[:, pos_idx]
+            y_pred_s = (y_proba_s >= float(threshold)).astype(int)
 
-            y_true = df_split[self.target_col].values
-            y_proba = self.model.predict_proba(df_split[self.predictor_cols])[:, pos_idx]
-            y_pred = (y_proba >= float(threshold)).astype(int)
+            cm = confusion_matrix(y_true_s, y_pred_s, labels=[0, 1])
+            cm_pct = cm / cm.sum()
+            heat = cm_pct if normalize else cm
 
-            cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
-            cm_pct = cm / cm.sum()  # % em relação ao TOTAL do split
-
-            annot = np.empty_like(cm).astype(object)
-            for i in range(2):
-                for j in range(2):
-                    contagem = f"{cm[i, j]:,}".replace(",", ".")
-                    percentual = f"{cm_pct[i, j]*100:.1f}".replace(".", ",")
-                    annot[i, j] = f"{contagem}\n{percentual}%"
-
-            heat_data = cm_pct if normalize else cm
-            sns.heatmap(
-                heat_data,
-                annot=annot,
-                fmt="",
-                cmap=cmap,
-                cbar=False,
-                vmin=0,
-                vmax=heat_data.max() if heat_data.max() > 0 else 1,
-                xticklabels=["Previsto 0", "Previsto 1"],
-                yticklabels=["Real 0", "Real 1"],
-                ax=ax,
+            fig.add_trace(
+                go.Heatmap(
+                    z=heat,
+                    x=["Previsto 0", "Previsto 1"],
+                    y=["Real 0", "Real 1"],
+                    colorscale=cmap,
+                    zmin=0,
+                    zmax=heat.max() if heat.max() > 0 else 1,
+                    showscale=False,
+                ),
+                row=1, col=c,
             )
-            ax.set_title(f"{title_prefix} – {split.capitalize()}")
-            ax.set_xlabel("Previsto")
-            ax.set_ylabel("Real")
 
-        plt.tight_layout()
+            fig.update_xaxes(title_text="Previsto", row=1, col=c)
+            fig.update_yaxes(title_text="Real", row=1, col=c)
+
+        fig.update_layout(title=title_prefix, template="plotly_white", height=figsize[1]*80, width=figsize[0]*n*80)
 
         if save and self.save_dir:
             fname = title_prefix.lower().replace(" ", "_") + ".png"
-            fig.savefig(self.save_dir / fname, dpi=150)
+            fig.write_image(self.save_dir / fname)
 
-        # Evita duplicação em notebooks
         if display:
-            plt.show()
-        else:
-            plt.close(fig)
+            fig.show()
 
         return fig
 
@@ -462,8 +484,8 @@ class BinaryPerformanceEvaluator:
         splits: list[str] | None = None,
         save: bool = False,
         display: bool = False,
-        title_prefix: str = "Curva de Calibração",
-    ):
+        title: str = "Curva de Calibração",
+    ) -> go.Figure:
         """
         Desenha curvas de calibração (Train/Test/Val) usando seaborn.
 
@@ -477,14 +499,15 @@ class BinaryPerformanceEvaluator:
             Se True, salva PNG em `self.save_dir`.
         display : bool
             Se False fecha a figura (útil p/ evitar duplicação).
-        title_prefix : str
-            Prefixo do título; o nome do split e Brier são acrescentados.
+        title : str
+            Título do gráfico.
         """
-        import matplotlib.pyplot as plt
-        import seaborn as sns
+        import pandas as pd
+        import numpy as np
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
         from sklearn.calibration import calibration_curve
         from sklearn.metrics import brier_score_loss
-        import numpy as np
 
         # ----------- obter splits disponíveis ----------
         available = {"train": self.df_train, "test": self.df_test}
@@ -502,14 +525,8 @@ class BinaryPerformanceEvaluator:
         # ----------- índice da classe positiva ----------
         pos_idx = list(self.model.classes_).index(1)
 
-        # ----------- figure & subplots -----------------
-        n = len(splits)
-        fig, axes = plt.subplots(
-            1, n, figsize=(5 * n, 5), squeeze=False
-        )
-        axes = axes.flatten()
-
-        for ax, split in zip(axes, splits):
+        infos = []
+        for split in splits:
             df = available[split]
             y_true = df[self.target_col].values
             y_proba = self.model.predict_proba(df[self.predictor_cols])[:, pos_idx]
@@ -518,34 +535,33 @@ class BinaryPerformanceEvaluator:
                 y_true, y_proba, n_bins=n_bins, strategy="uniform"
             )
             brier = brier_score_loss(y_true, y_proba)
+            infos.append((split, prob_pred, prob_true, brier))
 
-            # linha modelo
-            sns.lineplot(x=prob_pred, y=prob_true, marker="o", ax=ax, label="Modelo")
+        n = len(infos)
+        titles = [f"{s.capitalize()} (Brier = {b:.4f})" for s, _, _, b in infos]
+        fig = make_subplots(rows=1, cols=n, subplot_titles=titles)
 
-            # linha ideal
-            ax.plot([0, 1], [0, 1], linestyle="--", color="grey", label="Ideal")
+        for c, (split, prob_pred, prob_true, brier) in enumerate(infos, 1):
+            fig.add_trace(
+                go.Scatter(x=prob_pred, y=prob_true, mode="lines+markers", name="Modelo"),
+                row=1, col=c,
+            )
+            fig.add_trace(
+                go.Scatter(x=[0, 1], y=[0, 1], mode="lines", line=dict(dash="dash", color="grey"), showlegend=False),
+                row=1, col=c,
+            )
 
-            # aspecto quadrado
-            ax.set_aspect("equal", adjustable="box")
-            ax.set_xlim(0, 1)
-            ax.set_ylim(0, 1)
-            ax.grid(False)  # 👈 REMOVE AS GRIDLINES
-            
-            ax.set_title(f"{title_prefix} – {split.capitalize()} (Brier = {brier:.4f})")
-            ax.set_xlabel("Probabilidade Prevista")
-            ax.set_ylabel("Frequência Observada")
-            ax.legend(loc="upper left")
+            fig.update_xaxes(title_text="Probabilidade Prevista", range=[0, 1], row=1, col=c)
+            fig.update_yaxes(title_text="Frequência Observada", range=[0, 1], scaleanchor=f"x{c}", scaleratio=1, row=1, col=c)
 
-        plt.tight_layout()
+        fig.update_layout(title=title, template="plotly_white", showlegend=False, height=400, width=400*n)
 
         if save and self.save_dir:
-            fname = title_prefix.lower().replace(" ", "_") + ".png"
-            fig.savefig(self.save_dir / fname, dpi=150)
+            fname = title.lower().replace(" ", "_") + ".png"
+            fig.write_image(self.save_dir / fname)
 
         if display:
-            plt.show()
-        else:
-            plt.close(fig)
+            fig.show()
 
         return fig
 
@@ -827,6 +843,7 @@ class BinaryPerformanceEvaluator:
                             "Period": period.to_timestamp(),
                             "PSI": psi_val,
                             "Split": split_name,
+                            "reference_type": "train_global",
                         }
                     )
 
@@ -887,11 +904,42 @@ class BinaryPerformanceEvaluator:
 
         # ------------- casos de retorno -----------------
         if feature:
-            # retorna único gráfico + DataFrame filtrado
             return figures[feature], psi_df[psi_df["Variable"] == feature]
-        else:
-            # retorna dict<variable, figure> + DataFrame completo/filtrado
-            return figures, psi_df
+
+        # figura única com todas as variáveis
+        global_fig = go.Figure()
+        for (var, split), grp in psi_df.groupby(["Variable", "Split"]):
+            global_fig.add_trace(
+                go.Scatter(
+                    x=grp["Period"],
+                    y=grp["PSI"],
+                    mode="lines+markers",
+                    name=f"{var} ({split})",
+                )
+            )
+        for yline, color in [(0.10, "gray"), (0.25, "gray")]:
+            global_fig.add_hline(
+                y=yline,
+                line=dict(color=color, dash="dash", width=1),
+                opacity=0.4,
+                annotation_text=f"{yline:.2f}",
+                annotation_position="top right",
+                annotation_font_color=color,
+            )
+        global_fig.update_layout(
+            title=title or "PSI ao longo do tempo",
+            xaxis_title="Safra",
+            yaxis_title="PSI",
+            template="plotly_white",
+            xaxis_showgrid=False,
+            yaxis_showgrid=False,
+            yaxis_tickformat=".2f",
+        )
+
+        if save and self.save_dir:
+            global_fig.write_image(self.save_dir / "psi_all.png")
+
+        return global_fig, psi_df
 
     # def plot_psi(
     #     self,
@@ -1294,6 +1342,7 @@ class BinaryPerformanceEvaluator:
 
     def plot_group_radar(
         self,
+        features: list[str] | None = None,
         *,
         groups: list[int] | None = None,
         separated: bool = False,
@@ -1304,6 +1353,12 @@ class BinaryPerformanceEvaluator:
         title: str = "",
     ) -> Union[go.Figure, Dict[int, go.Figure]]:
         """Radar chart das médias das *features* por Grupo Homogêneo (GH).
+
+        Parameters
+        ----------
+        features : list[str] | None, optional
+            Lista de features numéricas para o radar. Se ``None`` (default),
+            todas as colunas preditoras numéricas são utilizadas.
 
         Novidades
         ---------
@@ -1346,10 +1401,17 @@ class BinaryPerformanceEvaluator:
             splits = list(all_splits.keys())
         splits = [s.lower() for s in splits if s.lower() in all_splits]
 
+        if features is None:
+            cols = self.predictor_cols
+        else:
+            cols = [c for c in features if c in self.predictor_cols]
+
         feats = [
-            c for c in self.predictor_cols
+            c for c in cols
             if pd.api.types.is_numeric_dtype(self.data_[c])
         ]
+        if not feats:
+            raise ValueError("No numeric features available for radar plot.")
 
         # ------------- escalonamento helper ---------------
         def _scale(df):
@@ -1418,7 +1480,7 @@ class BinaryPerformanceEvaluator:
 
             # fixa escala
             fig.update_layout(
-                **{f"polar{i}": dict(radialaxis=dict(visible=False, range=[r_min, r_max], fixedrange=True))
+                **{f"polar{i}": dict(radialaxis=dict(visible=False, range=[r_min, r_max]))
                 for i in range(1, n_gh+1)},
                 template="plotly_white",
                 title=title or "Evolução mensal",
@@ -1443,7 +1505,7 @@ class BinaryPerformanceEvaluator:
                     for s, df in all_splits.items()}
 
         def _polar_cfg(n):
-            return {f"polar{i}": dict(radialaxis=dict(visible=False, range=[r_min, r_max], fixedrange=True))
+            return {f"polar{i}": dict(radialaxis=dict(visible=False, range=[r_min, r_max]))
                     for i in range(1, n+1)}
 
         # -------- combinado ----------
