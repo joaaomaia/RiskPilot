@@ -102,7 +102,7 @@ print(stress["metrics"])
 - Brier Score
 
 ### 🧱 Matriz de Confusão
-- Gráfico Plotly com contraste automático de texto
+- Gráfico Seaborn em tons de azul
 - Suporta threshold otimizado (``"ks"``/``"youden"``)
 - Pode gerar matrizes por grupo (``group_col``)
 - Mostra valores absolutos e percentuais

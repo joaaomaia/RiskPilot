@@ -43,5 +43,5 @@ def test_plot_confusion_normalization():
     y_true = test["target"]
     y_pred_proba = model.predict_proba(test[["a", "b", "c"]])[:, 1]
     fig = evaluator.plot_confusion(y_true, y_pred_proba, normalize=True)
-    cm_abs = np.array(fig.data[0].z)
-    assert np.isclose(cm_abs.sum(), 1.0)
+    heat = fig.axes[0].collections[0].get_array().reshape(2, 2)
+    assert np.isclose(heat.sum(), 1.0)
