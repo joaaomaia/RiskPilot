@@ -1390,7 +1390,9 @@ class BinaryPerformanceEvaluator:
 
             # Bar centres / widths
             centres = edges[:-1] + np.diff(edges) / 2
-            bar_kwargs = dict(width=np.diff(edges), opacity=alpha)
+            # ``opacity`` is used by plotly whereas Matplotlib expects ``alpha``
+            bar_kwargs = {"width": np.diff(edges)}
+            bar_kwargs["opacity" if backend == "plotly" else "alpha"] = alpha
 
             # Plot ----------------------------------------------------------------
             if backend == "plotly":
