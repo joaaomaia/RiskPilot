@@ -40,6 +40,16 @@ stress = evaluator.run_stress_test(
 print(stress["metrics"])
 """
 
+
+# === Patch for BinaryPerformanceEvaluator ===
+# * Adds robust _filter_by_vintages that accepts integer vintages (e.g. 202301)
+#   or strings "202301" as well as datetime‑like inputs.
+# * Replaces the existing plot_histograms with an improved version that fixes
+#   IndexError, supports Plotly backend, and handles odd grid layouts.
+#
+# Copy‑paste the two definitions below into riskpilot/evaluation/binary_performance_evaluator.py
+# replacing the previous implementations.
+
 from __future__ import annotations
 
 import hashlib
@@ -50,6 +60,7 @@ import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Union
 
+import re
 import joblib
 import numpy as np
 import pandas as pd
@@ -103,11 +114,65 @@ def _compute_psi(counts_ref: np.ndarray, counts_cmp: np.ndarray, eps: float = 1e
     p_cmp = (counts_cmp + eps) / (counts_cmp.sum() + eps * len(counts_cmp))
     return _psi_single(p_ref, p_cmp)
 
-def _filter_by_vintages(df: pd.DataFrame, date_col: str, vintages: list) -> pd.DataFrame:
-    vintages = pd.to_datetime(pd.Series(vintages).astype(str), errors="coerce").dt.to_period("M")
-    periods = pd.to_datetime(df[date_col]).dt.to_period("M")
-    return df.loc[periods.isin(vintages)]
+# def _filter_by_vintages(df: pd.DataFrame, date_col: str, vintages: list) -> pd.DataFrame:
+#     vintages = pd.to_datetime(pd.Series(vintages).astype(str), errors="coerce").dt.to_period("M")
+#     periods = pd.to_datetime(df[date_col]).dt.to_period("M")
+#     return df.loc[periods.isin(vintages)]
 
+def _filter_by_vintages(
+    df: pd.DataFrame,
+    date_col: str,
+    vintages: list[int | str | pd.Timestamp | pd.Period],
+) -> pd.DataFrame:
+    """Return *df* rows whose *date_col* falls in the given *vintages*.
+
+    Parameters
+    ----------
+    df
+        Input DataFrame (must contain *date_col*).
+    date_col
+        Name of the datetime column (dtype *datetime64[ns]* or convertible).
+    vintages
+        List of elements representing YYYYMM periods. Accepts:
+
+        * ``int``      – e.g. ``202301``
+        * ``str``      – "202301" or any full date like "2023‑01‑15"
+        * ``pd.Timestamp``
+        * ``pd.Period`` (freq "M")
+
+    Notes
+    -----
+    1. The function converts each element into a *monthly* ``Period`` with
+    freq="M".  Six‑digit strings/ints are parsed via ``%Y%m`` for speed and
+    to avoid the *Could not infer format* warning.
+    2. Rows whose *date_col* is NaT are **excluded**.
+    """
+
+    if date_col not in df.columns:
+        raise KeyError(f"{date_col!r} not found in DataFrame columns")
+
+    # --- 1. Normalise vintages to PeriodIndex("M") ----------------------
+    periods: list[pd.Period] = []
+    for v in vintages:
+        if isinstance(v, pd.Period):
+            periods.append(v.asfreq("M"))
+        elif isinstance(v, (pd.Timestamp, np.datetime64)):
+            periods.append(pd.Period(v, freq="M"))
+        else:  # str | int
+            s = str(v)
+            if len(s) == 6 and s.isdigit():
+                # fast path for YYYYMM
+                periods.append(pd.Period(pd.to_datetime(s, format="%Y%m"), freq="M"))
+            else:
+                # fallback to dateutil parsing
+                periods.append(pd.Period(pd.to_datetime(s), freq="M"))
+
+    vintage_idx = pd.PeriodIndex(periods, freq="M")
+
+    # --- 2. Convert column to PeriodIndex("M") --------------------------
+    col_period = pd.to_datetime(df[date_col], errors="coerce").dt.to_period("M")
+
+    return df.loc[col_period.isin(vintage_idx)].copy()
 
 
 class BinaryPerformanceEvaluator:
@@ -1097,110 +1162,50 @@ class BinaryPerformanceEvaluator:
 
         return global_fig, psi_df
 
+    # ---------------------------------------------------------------------------
+    # 2. Enhanced plot_histograms method
+    # ---------------------------------------------------------------------------
 
-
-    def plot_histograms(  # noqa: C901  (complexity comes from plotting branches)
+    def plot_histograms(  # noqa: C901 (complexity)
         self,
         feature: str | Sequence[str],
         *,
-        # ------------------------------------------------------------------
-        # What to plot
         reference: dict[str, list[int]] | None = None,
         compare: dict[str, list[int]] | None = None,
-        # Histogram rules
         bins: int | str = "auto",
         stat: Literal["count", "density", "probability"] = "density",
         normalize_to_reference: bool = True,
         highlight_drift: bool = True,
         drift_metric: Literal["psi", "ks"] | None = "psi",
-        alpha: float = 0.40,
+        alpha: float = 0.4,
         log_scale: bool = False,
-        # Styling
         figsize: tuple[int, int] = (6, 4),
-        cmap_reference: str = "#3182bd",   # blue-ish
-        cmap_compare: str = "#fdae6b",     # orange-ish
-        # Output behaviour
+        cmap_reference: str = "#3182bd",
+        cmap_compare: str = "#fdae6b",
         show_table: bool = True,
         save: str | Path | None = None,
         show: bool = True,
         backend: Literal["matplotlib", "plotly"] = "matplotlib",
     ) -> None:
+        """Overlay reference vs. comparison histograms for numeric features.
+
+        See in‑line documentation for parameter details.  The function never
+        creates Jupyter notebooks or image files implicitly – files are only
+        written if *save* is provided.  Supports interactive Plotly output via
+        ``backend="plotly"``.
         """
-        Visualise distribution drift for one or more *numeric* features by overlaying
-        reference‐vs‐comparison histograms.
 
-        Parameters
-        ----------
-        feature
-            Column name **or** list/tuple of column names to inspect.
-        reference, compare
-            Mapping ``{split_name: [vintages]}`` or simply a list of vintages.
-            * If *None*, defaults to ``{"train": None}`` and the first available
-            hold-out split (``"test"`` → ``"val"``) respectively.
-            * A value of ``None`` inside the mapping means “use **all** vintages in
-            that split”.
-        bins
-            ``"auto"`` → Freedman–Diaconis rule (capped at 50).  
-            Otherwise an explicit integer.
-        stat
-            ``"count"`` raw frequencies  
-            ``"density"`` *pdf* (area = 1) · ``"probability"`` bin probabilities.
-        normalize_to_reference
-            When ``stat="count"``, rescales the *compare* histogram so both areas
-            match, making *shape* differences easier to see.
-        highlight_drift
-            If ``True`` *and* ``stat="count"``, outlines bars whose absolute
-            difference exceeds ``2 × sqrt(ref + cmp)`` (Poisson approximation).
-        drift_metric
-            ``"psi"`` or ``"ks"`` — value is appended to the legend. ``None`` omits.
-        alpha
-            Transparency of the filled bars (0 = transparent).
-        log_scale
-            Log-10 x-axis (useful for long-tailed amounts).
-        figsize
-            *Per subplot* size *(width, height)* in inches.
-        cmap_reference, cmap_compare
-            Colours for the two data sets (hex or any Matplotlib/Plotly spec).
-        show_table
-            Writes the metric value(s) under each subplot.
-        save
-            If given, persists the figure.  
-            *Matplotlib* → honours the extension (``.png``, ``.svg`` …).  
-            *Plotly*  → always saves an HTML file.
-        show
-            ``True`` → render immediately (Jupyter, scripts).  
-            ``False`` → suppress UI (good for batch pipelines).
-        backend
-            ``"matplotlib"`` (static, lightweight) or ``"plotly"`` (interactive).
+        import math
+        import warnings
 
-        Notes
-        -----
-        *Requires* private helpers:
-
-        - ``_filter_by_vintages(df, date_col, vintages)``
-        - ``_compute_psi(counts_ref, counts_cmp)``
-
-        Both already exist elsewhere in *BinaryPerformanceEvaluator*.
-
-        The function is **side-effect-free**: it only saves when *save* is
-        explicitly provided and never creates notebooks or image files otherwise.
-        """
-        # ------------------------------------------------------------------ #
-        # 0 ─ Imports kept inside to avoid hard dependency if user picks      #
-        #     different back-ends in other environments                       #
-        # ------------------------------------------------------------------ #
         if backend == "matplotlib":
             import matplotlib.pyplot as plt
         else:
             import plotly.graph_objects as go
             from plotly.subplots import make_subplots
-            from plotly.utils import PlotlyJSONEncoder  # noqa: F401  (used via go)
-
         from scipy import stats
 
-        # ------------------------------------------------------------------ #
-        # 1 ─ Feature validation                                             #
-        # ------------------------------------------------------------------ #
+        # ---------------- Feature list / validation --------------------------
         features = [feature] if isinstance(feature, str) else list(feature)
         missing = [f for f in features if f not in self.df_train.columns]
         if missing:
@@ -1208,507 +1213,165 @@ class BinaryPerformanceEvaluator:
                 f"Feature(s) not found: {missing}. Available: {list(self.df_train.columns)}"
             )
 
-        if self.date_col is None and (
-            (reference and any(reference.values()))
-            or (compare and any(compare.values()))
-        ):
-            raise ValueError("`date_col` is required for vintage filtering.")
-
-        # ------------------------------------------------------------------ #
-        # 2 ─ Prepare reference / compare DataFrames                         #
-        # ------------------------------------------------------------------ #
+        # ------------- Build split mapping -----------------------------------
         all_splits = {"train": self.df_train, "test": self.df_test}
         if getattr(self, "df_val", None) is not None:
             all_splits["val"] = self.df_val
 
-        def _prep(mapping, default_split):
-            """Normalise user input to a dict ‹split → vintages›."""
-            if mapping is None:
-                return {default_split: None}
-            if isinstance(mapping, (list, tuple)):
-                return {default_split: list(mapping)}
-            return {k.lower(): (list(v) if v is not None else None) for k, v in mapping.items()}
+        def _norm(inp, default):
+            if inp is None:
+                return {default: None}
+            if isinstance(inp, (list, tuple)):
+                return {default: list(inp)}
+            return {k.lower(): (list(v) if v is not None else None) for k, v in inp.items()}
 
-        reference = _prep(reference, "train")
-        default_cmp = "test" if "test" in all_splits else "val"
-        compare = _prep(compare, default_cmp)
+        reference = _norm(reference, "train")
+        cmp_default = "test" if "test" in all_splits else "val"
+        compare = _norm(compare, cmp_default)
 
         def _collect(mapping):
             frames = []
             for split, vint in mapping.items():
-                df = all_splits.get(split)
-                if df is None:
+                df_src = all_splits.get(split)
+                if df_src is None:
                     continue
-                if vint:
-                    df = _filter_by_vintages(df, self.date_col, vint)
-                frames.append(df)
+                if vint is not None:
+                    df_src = _filter_by_vintages(df_src, self.date_col, vint)
+                frames.append(df_src)
             return (
                 pd.concat(frames, axis=0, ignore_index=True) if frames else pd.DataFrame()
             )
 
-        df_ref = _collect(reference)
-        df_cmp = _collect(compare)
 
+        df_ref, df_cmp = _collect(reference), _collect(compare)
         if df_ref.empty or df_cmp.empty:
             warnings.warn("Histogram data is empty for the specified vintages.")
             return None
 
-        # ------------------------------------------------------------------ #
-        # 3 ─ Subplot grid                                                   #
-        # ------------------------------------------------------------------ #
+        # ------------- Build subplot grid ------------------------------------
         n = len(features)
         ncols = 1 if n == 1 else 2
         nrows = math.ceil(n / ncols)
 
         if backend == "plotly":
-            fig = make_subplots(
-                rows=nrows,
-                cols=ncols,
-                subplot_titles=features,
-                vertical_spacing=0.14,
-                horizontal_spacing=0.08,
-            )
+            fig = make_subplots(rows=nrows, cols=ncols, subplot_titles=features,
+                                vertical_spacing=0.14, horizontal_spacing=0.08)
         else:
-            fig, axes = plt.subplots(
-                nrows,
-                ncols,
-                figsize=(figsize[0] * ncols, figsize[1] * nrows),
-                squeeze=False,
-            )
+            fig, axes = plt.subplots(nrows, ncols, figsize=(figsize[0] * ncols, figsize[1] * nrows), squeeze=False)
 
-        # ------------------------------------------------------------------ #
-        # 4 ─ Helper: add a small text table/annotation with metric value    #
-        # ------------------------------------------------------------------ #
-        def _annotate(ax_or_fig, row_idx, col_idx, metric_str: str) -> None:
-            if not show_table or not metric_str:
+        # ------------- helper to show metric below subplot -------------------
+        def _annot(plot_obj, row, col, text):
+            if not show_table or not text:
                 return
-
             if backend == "plotly":
-                fig.add_annotation(
-                    text=metric_str.replace(" ", "<br>"),
-                    xref=f"x{row_idx * ncols + col_idx}" if (n > 1) else "x",
-                    yref=f"y{row_idx * ncols + col_idx}" if (n > 1) else "y",
-                    x=0.5,
-                    y=-0.25,
-                    showarrow=False,
-                    align="center",
-                    font=dict(size=10),
-                )
-            else:  # matplotlib
-                words = metric_str.replace("=", " ").split()
-                rows = [words[i : i + 2] for i in range(0, len(words), 2)]
-                tbl = ax_or_fig.table(
-                    cellText=rows,
-                    loc="bottom",
-                    bbox=[0.0, -0.3, 1, 0.2],
-                    cellLoc="center",
-                )
+                fig.add_annotation(text=text.replace(" ", "<br>"),
+                                xref=f"x{row * ncols + col}" if n > 1 else "x",
+                                yref=f"y{row * ncols + col}" if n > 1 else "y",
+                                x=0.5, y=-0.25, showarrow=False, align="center", font=dict(size=10))
+            else:
+                words = text.replace("=", " ").split()
+                rows = [words[i:i + 2] for i in range(0, len(words), 2)]
+                tbl = plot_obj.table(cellText=rows, loc="bottom", bbox=[0.0, -0.3, 1, 0.2], cellLoc="center")
                 tbl.scale(1, 1.1)
 
-        # ------------------------------------------------------------------ #
-        # 5 ─ Main loop over features                                        #
-        # ------------------------------------------------------------------ #
+        # ------------- Main loop over features -------------------------------
         for idx, feat in enumerate(features):
-            row = (idx // ncols) + 1
-            col = (idx % ncols) + 1
-            if backend == "plotly":
-                ax = None  # not used, but kept for clarity
-            else:
+            row, col = (idx // ncols) + 1, (idx % ncols) + 1
+            if backend == "matplotlib":
                 ax = axes[row - 1, col - 1]
-
-            # Prepare series
-            ref_series = pd.to_numeric(df_ref[feat], errors="coerce").dropna()
-            cmp_series = pd.to_numeric(df_cmp[feat], errors="coerce").dropna()
-
-            if ref_series.empty or cmp_series.empty:
+            # numeric vectors --------------------------------------------------
+            ref_vec = pd.to_numeric(df_ref[feat], errors="coerce").dropna().values
+            cmp_vec = pd.to_numeric(df_cmp[feat], errors="coerce").dropna().values
+            if ref_vec.size == 0 or cmp_vec.size == 0:
                 warnings.warn(f"No data to plot for feature '{feat}'.")
                 if backend == "matplotlib":
                     ax.set_visible(False)
                 continue
 
-            # Bin edges
-            data_ref = ref_series.values
-            if bins == "auto":
-                edges = np.histogram_bin_edges(data_ref, bins="fd")
-                if len(edges) - 1 > 50:
-                    edges = np.linspace(data_ref.min(), data_ref.max(), 51)
-            else:
-                edges = np.histogram_bin_edges(data_ref, bins=bins)
+            edges = np.histogram_bin_edges(ref_vec, bins="fd" if bins == "auto" else bins)
+            if bins == "auto" and len(edges) - 1 > 50:
+                edges = np.linspace(ref_vec.min(), ref_vec.max(), 51)
 
-            counts_ref, _ = np.histogram(data_ref, bins=edges)
-            counts_cmp, _ = np.histogram(cmp_series.values, bins=edges)
+            c_ref, _ = np.histogram(ref_vec, bins=edges)
+            c_cmp, _ = np.histogram(cmp_vec, bins=edges)
 
-            # Convert to chosen stat
-            scale = 1.0
             if stat == "count":
-                hist_ref = counts_ref
-                hist_cmp = counts_cmp
-                if normalize_to_reference and hist_cmp.sum() > 0:
-                    scale = hist_ref.sum() / hist_cmp.sum()
-                    hist_cmp = counts_cmp * scale
+                h_ref, h_cmp = c_ref, c_cmp
+                if normalize_to_reference and h_cmp.sum():
+                    h_cmp = h_cmp * (h_ref.sum() / h_cmp.sum())
             else:
-                widths = np.diff(edges)
-                p_ref = counts_ref / counts_ref.sum() if counts_ref.sum() else counts_ref
-                p_cmp = counts_cmp / counts_cmp.sum() if counts_cmp.sum() else counts_cmp
+                w = np.diff(edges)
+                p_ref, p_cmp = c_ref / c_ref.sum(), c_cmp / c_cmp.sum()
                 if stat == "density":
-                    hist_ref = p_ref / widths
-                    hist_cmp = p_cmp / widths
-                else:  # probability
-                    hist_ref = p_ref
-                    hist_cmp = p_cmp
+                    h_ref, h_cmp = p_ref / w, p_cmp / w
+                else:
+                    h_ref, h_cmp = p_ref, p_cmp
 
-            # Bar centres / widths
-            centres = edges[:-1] + np.diff(edges) / 2
-            bar_kwargs = dict(width=np.diff(edges), opacity=alpha)
+            centres, width = edges[:-1] + np.diff(edges) / 2, np.diff(edges)
+            bar_kwargs = dict(width=width, opacity=alpha)
 
-            # Plot ----------------------------------------------------------------
+            # ---- first bar set: reference ------------------------------------
             if backend == "plotly":
-                fig.add_bar(
-                    x=centres,
-                    y=hist_ref,
-                    name="Reference" if idx == 0 else "",
-                    marker=dict(color=cmap_reference),
-                    row=row,
-                    col=col,
-                    **bar_kwargs,
-                )
+                fig.add_bar(x=centres, y=h_ref, name="Reference" if idx == 0 else "", marker_color=cmap_reference,
+                            row=row, col=col, **bar_kwargs)
             else:
-                ax.bar(
-                    centres,
-                    hist_ref,
-                    label="Reference",
-                    color=cmap_reference,
-                    align="center",
-                    **bar_kwargs,
-                )
+                ax.bar(centres, h_ref, label="Reference", color=cmap_reference, align="center", **bar_kwargs)
 
-            # Highlight drift bars (only meaningful for raw counts)
-            edge_colours = None
+            # ---- second bar set: compare -------------------------------------
+            edge_cols = None
             if highlight_drift and stat == "count":
-                scaled_cmp = counts_cmp * scale
-                diff = np.abs(scaled_cmp - counts_ref)
-                thresh = 2 * np.sqrt(scaled_cmp + counts_ref)
-                edge_colours = ["red" if d > t else None for d, t in zip(diff, thresh)]
-
+                diff = np.abs(h_cmp - h_ref)
+                thresh = 2 * np.sqrt(h_cmp + h_ref)
+                edge_cols = ["red" if d > t else None for d, t in zip(diff, thresh)]
             if backend == "plotly":
-                fig.add_bar(
-                    x=centres,
-                    y=hist_cmp,
-                    name="Compare" if idx == 0 else "",
-                    marker=dict(
-                        color=cmap_compare,
-                        line=dict(
-                            color=edge_colours if edge_colours else cmap_compare,
-                            width=1.8 if edge_colours else 0,
-                        ),
-                    ),
-                    row=row,
-                    col=col,
-                    **bar_kwargs,
-                )
+                fig.add_bar(x=centres, y=h_cmp, name="Compare" if idx == 0 else "", marker=dict(color=cmap_compare,
+                            line=dict(color=edge_cols if edge_cols else cmap_compare,
+                                    width=1.8 if edge_cols else 0)), row=row, col=col, **bar_kwargs)
             else:
-                ax.bar(
-                    centres,
-                    hist_cmp,
-                    label="Compare",
-                    color=cmap_compare,
-                    align="center",
-                    edgecolor=edge_colours,
-                    linewidth=1.5 if edge_colours else 0,
-                    **bar_kwargs,
-                )
+                ax.bar(centres, h_cmp, label="Compare", color=cmap_compare, align="center", edgecolor=edge_cols,
+                    linewidth=1.4 if edge_cols else 0, **bar_kwargs)
 
-            # Metric --------------------------------------------------------------
-            metric_str = ""
+            # ---- metric -------------------------------------------------------
+            metric = ""
             if drift_metric == "psi":
-                psi_val = _compute_psi(counts_ref, counts_cmp)
-                metric_str = f"PSI={psi_val:.3f}"
+                metric = f"PSI={_compute_psi(c_ref, c_cmp):.3f}"
             elif drift_metric == "ks":
-                ks_stat, p_val = stats.ks_2samp(ref_series, cmp_series)
-                metric_str = f"KS={ks_stat:.3f}  p={p_val:.3f}"
+                ks_stat, p_val = stats.ks_2samp(ref_vec, cmp_vec)
+                metric = f"KS={ks_stat:.3f}  p={p_val:.3f}"
 
-            # Axes labels / scale / legend ---------------------------------------
             if backend == "plotly":
-                fig.update_xaxes(
-                    title=feat,
-                    type="log" if log_scale else "linear",
-                    row=row,
-                    col=col,
-                )
-                fig.update_yaxes(
-                    title=stat.capitalize(),
-                    row=row,
-                    col=col,
-                )
+                fig.update_xaxes(title=feat, type="log" if log_scale else "linear", row=row, col=col)
+                fig.update_yaxes(title=stat.capitalize(), row=row, col=col)
             else:
                 ax.set_title(feat)
                 ax.set_ylabel(stat.capitalize())
                 if log_scale:
                     ax.set_xscale("log")
-                ax.legend(title=metric_str)
+                ax.legend(title=metric)
 
-            # Table / annotation --------------------------------------------------
-            _annotate(ax if backend == "matplotlib" else fig, row, col, metric_str)
+            _annot(ax if backend == "matplotlib" else fig, row, col, metric)
 
-        # ------------------------------------------------------------------ #
-        # 6 ─ Post-processing & output                                       #
-        # ------------------------------------------------------------------ #
+        # ------------- Final layout / output ---------------------------------
         if backend == "plotly":
-            fig.update_layout(
-                template="plotly_white",
-                height=figsize[1] * nrows * 110,
-                width=figsize[0] * ncols * 110,
-                barmode="overlay",
-            )
+            fig.update_layout(template="plotly_white", barmode="overlay",
+                            height=figsize[1] * nrows * 110, width=figsize[0] * ncols * 110)
             if save:
-                save_path = Path(save).with_suffix(".html")
-                fig.write_html(str(save_path))
+                fig.write_html(str(Path(save).with_suffix(".html")))
             if show:
                 fig.show()
         else:
-            # Hide unused axes
+            # hide unused
             for j in range(n, nrows * ncols):
                 axes.flat[j].set_visible(False)
-
             fig.tight_layout()
             if save:
-                plt.savefig(Path(save))
-            if show:
-                plt.show()
-            else:
-                plt.close(fig)
+                import matplotlib.pyplot as plt
 
-        return None
-
-
-    # def plot_psi(
-    #     self,
-    #     *,
-    #     reference_df: Optional[pd.DataFrame] = None,
-    #     bin_strategy: Optional[Dict[str, Any]] = None,
-    #     min_obs: int = 100,
-    #     eps: float = 1e-9,
-    #     reference_last_period: bool = False,
-    #     save: bool = False,
-    #     title: str = "",
-    # ) -> tuple[go.Figure, pd.DataFrame]:
-    #     """Compute and plot PSI per variable through time using Plotly.
-
-    #     Parameters
-    #     ----------
-    #     reference_df : pd.DataFrame, optional
-    #         Dataset used as reference for binning. Defaults to ``df_train``.
-    #     bin_strategy : dict, optional
-    #         ``{"type": "quantile", "n_bins": 10}`` or ``{"type": "fixed"}``.
-    #     min_obs : int, default 100
-    #         Minimum observations required per period to compute PSI.
-    #     eps : float, default 1e-9
-    #         Small constant added to counts to avoid zeros.
-    #     reference_last_period : bool, default False
-    #         If ``True`` each cohort is compared with the immediately
-    #         preceding one. When ``False`` the reference is ``df_train``
-    #         or ``reference_df`` if provided.
-    #         Periods with fewer than ``min_obs`` records are skipped. Adjust
-    #         ``min_obs`` (e.g. ``min_obs=1``) if you have short time windows.
-    #     save : bool, default False
-    #         If ``True`` and ``save_dir`` is set, image is written to disk.
-
-    #     Returns
-    #     -------
-    #     go.Figure, pd.DataFrame
-    #         Figure with PSI evolution and DataFrame with the computed values
-    #         (columns: ``Variable``, ``Period``, ``PSI``, ``Split``,
-    #         ``reference_type``).
-    #     """
-
-    #     if self.date_col is None:
-    #         raise ValueError("`date_col` is required for plot_psi().")
-
-    #     reference_df = reference_df if reference_df is not None else self.df_train
-    #     bin_strategy = bin_strategy or {"type": "quantile", "n_bins": 10}
-
-    #     splits = [
-    #         ("Train", self.df_train),
-    #         ("Test", self.df_test),
-    #         *([("Val", self.df_val)] if self.df_val is not None else []),
-    #     ]
-
-    #     psi_records: List[Dict[str, Any]] = []
-
-    #     def _get_edges(series: pd.Series) -> np.ndarray:
-    #         ser = pd.to_numeric(series, errors="coerce").dropna()
-    #         if ser.empty:
-    #             return np.array([])
-    #         if bin_strategy.get("type") == "quantile":
-    #             try:
-    #                 _, edges = pd.qcut(
-    #                     ser,
-    #                     q=bin_strategy.get("n_bins", 10),
-    #                     retbins=True,
-    #                     duplicates="drop",
-    #                 )
-    #             except ValueError:
-    #                 edges = np.linspace(
-    #                     ser.min(),
-    #                     ser.max(),
-    #                     bin_strategy.get("n_bins", 10) + 1,
-    #                 )
-    #         else:
-    #             edges = np.linspace(
-    #                 ser.min(),
-    #                 ser.max(),
-    #                 bin_strategy.get("n_bins", 10) + 1,
-    #             )
-    #         edges[0] = min(edges[0], ser.min())
-    #         edges[-1] = max(edges[-1], ser.max())
-    #         return edges
-
-    #     if reference_last_period:
-    #         for split_name, df in splits:
-    #             df = df.copy()
-    #             df["Period"] = pd.to_datetime(df[self.date_col]).dt.to_period("M")
-    #             periods = sorted(df["Period"].unique())
-    #             for idx in range(1, len(periods)):
-    #                 cur_period = periods[idx]
-    #                 ref_period = periods[idx - 1]
-
-    #                 cur_df = df[df["Period"] == cur_period]
-    #                 ref_df = df[df["Period"] == ref_period]
-
-    #                 if len(cur_df) < min_obs or len(ref_df) < min_obs:
-    #                     continue
-
-    #                 for var in self._psi_variables():
-    #                     ref_series = ref_df[var]
-    #                     ser = cur_df[var]
-    #                     edges = _get_edges(ref_series)
-    #                     if edges.size == 0:
-    #                         continue
-
-    #                     counts_ref = (
-    #                         np.histogram(ref_series, bins=edges)[0].astype(float) + eps
-    #                     )
-    #                     p_ref = counts_ref / counts_ref.sum()
-
-    #                     edges_adj = edges.copy()
-    #                     ser_num = pd.to_numeric(ser, errors="coerce").dropna()
-    #                     if ser_num.empty:
-    #                         continue
-    #                     if ser_num.min() < edges_adj[0]:
-    #                         edges_adj[0] = ser_num.min()
-    #                     if ser_num.max() > edges_adj[-1]:
-    #                         edges_adj[-1] = ser_num.max()
-
-    #                     counts_test = (
-    #                         np.histogram(ser_num, bins=edges_adj)[0].astype(float) + eps
-    #                     )
-    #                     p_test = counts_test / counts_test.sum()
-
-    #                     psi = _psi_single(p_ref, p_test)
-    #                     psi_records.append(
-    #                         {
-    #                             "Variable": var,
-    #                             "Period": cur_period.to_timestamp(),
-    #                             "PSI": psi,
-    #                             "Split": split_name,
-    #                             "reference_type": "last_period",
-    #                         }
-    #                     )
-    #     else:
-    #         global_edges: Dict[str, np.ndarray] = {}
-    #         for var in self._psi_variables():
-    #             edges = _get_edges(reference_df[var])
-    #             if edges.size == 0:
-    #                 continue
-    #             global_edges[var] = edges
-    #         for split_name, df in splits:
-    #             periods = (
-    #                 pd.to_datetime(df[self.date_col])
-    #                 .dt.to_period("M")
-    #                 .sort_values()
-    #                 .unique()
-    #             )
-    #             for var, edges in global_edges.items():
-    #                 ref_series = pd.to_numeric(
-    #                     reference_df[var], errors="coerce"
-    #                 ).dropna()
-    #                 counts_ref = (
-    #                     np.histogram(ref_series, bins=edges)[0].astype(float) + eps
-    #                 )
-    #                 p_ref = counts_ref / counts_ref.sum()
-    #                 for period in periods:
-    #                     subset = df[
-    #                         pd.to_datetime(df[self.date_col]).dt.to_period("M")
-    #                         == period
-    #                     ]
-    #                     if len(subset) < min_obs:
-    #                         continue
-    #                     ser = pd.to_numeric(subset[var], errors="coerce").dropna()
-    #                     if ser.empty:
-    #                         continue
-    #                     edges_adj = edges.copy()
-    #                     if ser.min() < edges_adj[0]:
-    #                         edges_adj[0] = ser.min()
-    #                     if ser.max() > edges_adj[-1]:
-    #                         edges_adj[-1] = ser.max()
-
-    #                     counts_test = (
-    #                         np.histogram(ser, bins=edges_adj)[0].astype(float) + eps
-    #                     )
-    #                     p_test = counts_test / counts_test.sum()
-    #                     psi = _psi_single(p_ref, p_test)
-    #                     psi_records.append(
-    #                         {
-    #                             "Variable": var,
-    #                             "Period": period.to_timestamp(),
-    #                             "PSI": psi,
-    #                             "Split": split_name,
-    #                             "reference_type": "train_global",
-    #                         }
-    #                     )
-
-    #     psi_df = pd.DataFrame(psi_records)
-    #     if psi_df.empty:
-    #         warnings.warn("PSI could not be computed (insufficient data).")
-    #         return go.Figure(), psi_df
-
-    #     fig = go.Figure()
-    #     for (var, split), grp in psi_df.groupby(["Variable", "Split"]):
-    #         name = f"{var} ({split})" if split else str(var)
-    #         fig.add_trace(
-    #             go.Scatter(
-    #                 x=grp["Period"],
-    #                 y=grp["PSI"],
-    #                 mode="lines+markers",
-    #                 name=name,
-    #             )
-    #         )
-
-    #     fig.add_hline(
-    #         y=0.1,
-    #         line=dict(color="orange", dash="dash"),
-    #         annotation_text="0.10",
-    #     )
-    #     fig.add_hline(
-    #         y=0.25,
-    #         line=dict(color="red", dash="dash"),
-    #         annotation_text="0.25",
-    #     )
-    #     fig.update_layout(
-    #         title=title or "PSI over Time by Variable",
-    #         xaxis_title="Safra",
-    #         yaxis_title="PSI",
-    #         template="plotly_white",
-    #     )
-    #     if save and self.save_dir:
-    #         fig.write_image(str(self.save_dir / "psi_over_time.png"))
-
-    #     #fig.show()
-    #     return fig, psi_df
 
     def plot_ks(
         self,
         *,
+        limite: float = 0.20,
         save: bool = False,
         title: str = "",
     ) -> go.Figure | None:
@@ -1716,10 +1379,6 @@ class BinaryPerformanceEvaluator:
         KS por safra para Train/Test/(Val) com cores fixas e hover customizado.
         """
 
-        import warnings
-
-        import numpy as np
-        import pandas as pd
         import plotly.graph_objects as go
         from sklearn.metrics import roc_curve
 
@@ -1796,9 +1455,9 @@ class BinaryPerformanceEvaluator:
 
         # linha de referência 0.20
         fig.add_hline(
-            y=0.20,
+            y=limite,
             line=dict(color="gray", dash="dash", width=1),
-            annotation_text="0.20",
+            annotation_text=f"{limite}",
             annotation_position="top right",
         )
 
