@@ -94,6 +94,20 @@ def _rgba(color: str, alpha: float) -> str:
         return color.replace("rgb", "rgba").replace(")", f",{alpha})")
     return color
 
+# --- Helper utilities ---
+
+def _compute_psi(counts_ref: np.ndarray, counts_cmp: np.ndarray, eps: float = 1e-6) -> float:
+    """Compute PSI using histogram bin counts."""
+    p_ref = (counts_ref + eps) / (counts_ref.sum() + eps * len(counts_ref))
+    p_cmp = (counts_cmp + eps) / (counts_cmp.sum() + eps * len(counts_cmp))
+    return _psi_single(p_ref, p_cmp)
+
+def _filter_by_vintages(df: pd.DataFrame, date_col: str, vintages: list) -> pd.DataFrame:
+    vintages = pd.to_datetime(pd.Series(vintages).astype(str), errors="coerce").dt.to_period("M")
+    periods = pd.to_datetime(df[date_col]).dt.to_period("M")
+    return df.loc[periods.isin(vintages)]
+
+
 
 class BinaryPerformanceEvaluator:
     """Evaluate binary classifier performance on multiple splits.
@@ -1074,6 +1088,201 @@ class BinaryPerformanceEvaluator:
             global_fig.write_image(self.save_dir / "psi_all.png")
 
         return global_fig, psi_df
+
+    def plot_histograms(
+        self,
+        feature: str | list[str],
+        *,
+        reference: dict[str, list[int]] | None = None,
+        compare: dict[str, list[int]] | None = None,
+        bins: int | str = "auto",
+        stat: Literal["count", "density", "probability"] = "density",
+        normalize_to_reference: bool = True,
+        highlight_drift: bool = True,
+        drift_metric: Literal["psi", "ks"] | None = "psi",
+        alpha: float = 0.4,
+        log_scale: bool = False,
+        figsize: tuple[int, int] = (6, 4),
+        cmap_reference: str = "tab:blue",
+        cmap_compare: str = "tab:orange",
+        show_table: bool = True,
+        save: str | Path | None = None,
+        show: bool = True,
+    ) -> None:
+        """Plot reference vs. comparison histograms for numerical features."""
+
+        import math
+        import matplotlib.pyplot as plt
+        from pathlib import Path
+        from scipy import stats
+
+        if isinstance(feature, str):
+            features = [feature]
+        else:
+            features = list(feature)
+
+        # ---------------------- validate features ----------------------
+        missing = [f for f in features if f not in self.df_train.columns]
+        if missing:
+            raise ValueError(
+                f"Features not found: {missing}. Available: {list(self.df_train.columns)}"
+            )
+
+        if self.date_col is None and (
+            (reference and any(v for v in reference.values()))
+            or (compare and any(v for v in compare.values()))
+        ):
+            raise ValueError("`date_col` is required for vintage filtering.")
+
+        # ---------------------- prepare splits -------------------------
+        all_splits = {
+            "train": self.df_train,
+            "test": self.df_test,
+        }
+        if getattr(self, "df_val", None) is not None:
+            all_splits["val"] = self.df_val
+
+        def _prep(mapping, default_split):
+            if mapping is None:
+                return {default_split: None}
+            if isinstance(mapping, list):
+                return {default_split: mapping}
+            return {k.lower(): v for k, v in mapping.items()}
+
+        reference = _prep(reference, "train")
+        default_compare = "test" if "test" in all_splits else "val"
+        compare = _prep(compare, default_compare)
+
+        def _collect(mapping):
+            frames = []
+            for split, vint in mapping.items():
+                df = all_splits.get(split)
+                if df is None:
+                    continue
+                if vint:
+                    df = _filter_by_vintages(df, self.date_col, vint)
+                frames.append(df)
+            return pd.concat(frames, axis=0, ignore_index=True) if frames else pd.DataFrame()
+
+        df_ref = _collect(reference)
+        df_cmp = _collect(compare)
+
+        if df_ref.empty or df_cmp.empty:
+            warnings.warn("Histogram data is empty for the specified vintages.")
+            return None
+
+        n = len(features)
+        ncols = 2
+        nrows = math.ceil(n / 2)
+        fig, axes = plt.subplots(
+            nrows,
+            ncols,
+            figsize=(figsize[0] * ncols, figsize[1] * nrows),
+            squeeze=False,
+        )
+
+        for idx, feat in enumerate(features):
+            ax = axes.flat[idx]
+            ref_series = pd.to_numeric(df_ref[feat], errors="coerce").dropna()
+            cmp_series = pd.to_numeric(df_cmp[feat], errors="coerce").dropna()
+
+            if ref_series.empty or cmp_series.empty:
+                warnings.warn(f"No data to plot for feature '{feat}'.")
+                ax.set_visible(False)
+                continue
+
+            data_ref = ref_series.values
+            if bins == "auto":
+                edges = np.histogram_bin_edges(data_ref, bins="fd")
+                if len(edges) - 1 > 50:
+                    edges = np.linspace(data_ref.min(), data_ref.max(), 51)
+            else:
+                edges = np.histogram_bin_edges(data_ref, bins=bins)
+
+            counts_ref, _ = np.histogram(data_ref, bins=edges)
+            counts_cmp, _ = np.histogram(cmp_series.values, bins=edges)
+
+            scale = 1.0
+            if stat == "count":
+                hist_ref = counts_ref
+                hist_cmp = counts_cmp
+                if normalize_to_reference and hist_cmp.sum() > 0:
+                    scale = hist_ref.sum() / hist_cmp.sum()
+                    hist_cmp = counts_cmp * scale
+            else:
+                widths = np.diff(edges)
+                p_ref = counts_ref / counts_ref.sum()
+                p_cmp = counts_cmp / counts_cmp.sum()
+                if stat == "density":
+                    hist_ref = p_ref / widths
+                    hist_cmp = p_cmp / widths
+                else:  # probability
+                    hist_ref = p_ref
+                    hist_cmp = p_cmp
+
+            centers = edges[:-1] + np.diff(edges) / 2
+            bar_kwargs = dict(align="center", width=np.diff(edges), alpha=alpha)
+            ax.bar(
+                centers,
+                hist_ref,
+                color=cmap_reference,
+                label="Reference",
+                **bar_kwargs,
+            )
+            edgecolors = None
+            if highlight_drift and stat == "count":
+                scaled_cmp = counts_cmp * scale
+                diff = np.abs(scaled_cmp - counts_ref)
+                thresh = 2 * np.sqrt(scaled_cmp + counts_ref)
+                edgecolors = ["red" if d > t else None for d, t in zip(diff, thresh)]
+            ax.bar(
+                centers,
+                hist_cmp,
+                color=cmap_compare,
+                label="Compare",
+                edgecolor=edgecolors,
+                linewidth=1.5 if edgecolors else 0,
+                **bar_kwargs,
+            )
+
+            metric_info = ""
+            if drift_metric == "psi":
+                psi_val = _compute_psi(counts_ref, counts_cmp)
+                metric_info = f"PSI={psi_val:.3f}"
+            elif drift_metric == "ks":
+                ks_stat, p_val = stats.ks_2samp(data_ref, cmp_series.values)
+                metric_info = f"KS={ks_stat:.3f} p={p_val:.3f}"
+
+            ax.set_title(feat)
+            ax.set_ylabel(stat.capitalize())
+            if log_scale:
+                ax.set_xscale("log")
+            ax.legend(title=metric_info)
+
+            if show_table and metric_info:
+                tbl = ax.table(
+                    cellText=[[metric_info.split()[0], metric_info.split()[1]]]
+                    if "p=" not in metric_info
+                    else [[metric_info.split()[0]], [metric_info.split()[1]]],
+                    loc="bottom",
+                    bbox=[0.0, -0.3, 1, 0.2],
+                    cellLoc="center",
+                )
+                tbl.scale(1, 1.2)
+
+        # hide unused axes
+        for j in range(n, nrows * ncols):
+            axes.flat[j].set_visible(False)
+
+        fig.tight_layout()
+        if save:
+            plt.savefig(Path(save))
+        if show:
+            plt.show()
+        else:
+            plt.close(fig)
+
+        return None
 
     # def plot_psi(
     #     self,

@@ -130,6 +130,19 @@ print(stress["metrics"])
 ### 🧭 KS Temporal
 - Mostra evolução do KS (Kolmogorov–Smirnov) no tempo para treino/teste/validação
 
+### 📊 Histogram Drift Visualisation
+Exibe histogramas comparando distribuições de treino e teste para variáveis numéricas.
+
+```python
+evaluator.plot_histograms(
+    feature=["balance", "income"],
+    reference={"train": [202201]},
+    compare={"test": [202301]},
+    bins="auto",
+    drift_metric="psi",
+)
+```
+
 ---
 
 ## 📤 Saídas
