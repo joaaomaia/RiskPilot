@@ -95,19 +95,43 @@ def _rgba(color: str, alpha: float) -> str:
         return color.replace("rgb", "rgba").replace(")", f",{alpha})")
     return color
 
+
 # --- Helper utilities ---
 
-def _compute_psi(counts_ref: np.ndarray, counts_cmp: np.ndarray, eps: float = 1e-6) -> float:
+
+def _compute_psi(
+    counts_ref: np.ndarray, counts_cmp: np.ndarray, eps: float = 1e-6
+) -> float:
     """Compute PSI using histogram bin counts."""
     p_ref = (counts_ref + eps) / (counts_ref.sum() + eps * len(counts_ref))
     p_cmp = (counts_cmp + eps) / (counts_cmp.sum() + eps * len(counts_cmp))
     return _psi_single(p_ref, p_cmp)
 
-def _filter_by_vintages(df: pd.DataFrame, date_col: str, vintages: list) -> pd.DataFrame:
-    vintages = pd.to_datetime(pd.Series(vintages).astype(str), errors="coerce").dt.to_period("M")
-    periods = pd.to_datetime(df[date_col]).dt.to_period("M")
-    return df.loc[periods.isin(vintages)]
 
+def _filter_by_vintages(
+    df: pd.DataFrame, date_col: str, vintages: list
+) -> pd.DataFrame:
+    """Return rows matching the specified vintages.
+
+    Vintages may be provided as ``YYYYMM`` integers/strings or any format
+    recognised by ``pandas.to_datetime``. Integers in ``YYYYMM`` form are
+    interpreted as year/month combinations.
+    """
+
+    vintages_series = pd.Series(vintages).astype(str)
+
+    if vintages_series.str.fullmatch(r"\d{6}").all():
+        parsed = pd.to_datetime(vintages_series, format="%Y%m", errors="coerce")
+    else:
+        parsed = pd.to_datetime(vintages_series, errors="coerce")
+        if parsed.isna().any():
+            parsed = parsed.fillna(
+                pd.to_datetime(vintages_series, format="%Y%m", errors="coerce")
+            )
+
+    vintages_period = parsed.dropna().dt.to_period("M")
+    periods = pd.to_datetime(df[date_col]).dt.to_period("M")
+    return df.loc[periods.isin(vintages_period)]
 
 
 class BinaryPerformanceEvaluator:
@@ -678,15 +702,15 @@ class BinaryPerformanceEvaluator:
             fig.update_xaxes(
                 title_text="Probabilidade Prevista",
                 range=[0, 1],
-                constrain="domain",     # usa 100 % do espaço horizontal
+                constrain="domain",  # usa 100 % do espaço horizontal
                 showgrid=False,
                 row=1,
-                col=c
+                col=c,
             )
             fig.update_yaxes(
                 title_text="Frequência Observada",
                 range=[0, 1],
-                constrain="domain",     # usa 100 % do espaço horizontal
+                constrain="domain",  # usa 100 % do espaço horizontal
                 scaleanchor=f"x{c}",
                 scaleratio=1,
                 row=1,
@@ -1097,8 +1121,6 @@ class BinaryPerformanceEvaluator:
 
         return global_fig, psi_df
 
-
-
     def plot_histograms(  # noqa: C901  (complexity comes from plotting branches)
         self,
         feature: str | Sequence[str],
@@ -1117,8 +1139,8 @@ class BinaryPerformanceEvaluator:
         log_scale: bool = False,
         # Styling
         figsize: tuple[int, int] = (6, 4),
-        cmap_reference: str = "#3182bd",   # blue-ish
-        cmap_compare: str = "#fdae6b",     # orange-ish
+        cmap_reference: str = "#3182bd",  # blue-ish
+        cmap_compare: str = "#fdae6b",  # orange-ish
         # Output behaviour
         show_table: bool = True,
         save: str | Path | None = None,
@@ -1140,10 +1162,10 @@ class BinaryPerformanceEvaluator:
             * A value of ``None`` inside the mapping means “use **all** vintages in
             that split”.
         bins
-            ``"auto"`` → Freedman–Diaconis rule (capped at 50).  
+            ``"auto"`` → Freedman–Diaconis rule (capped at 50).
             Otherwise an explicit integer.
         stat
-            ``"count"`` raw frequencies  
+            ``"count"`` raw frequencies
             ``"density"`` *pdf* (area = 1) · ``"probability"`` bin probabilities.
         normalize_to_reference
             When ``stat="count"``, rescales the *compare* histogram so both areas
@@ -1164,11 +1186,11 @@ class BinaryPerformanceEvaluator:
         show_table
             Writes the metric value(s) under each subplot.
         save
-            If given, persists the figure.  
-            *Matplotlib* → honours the extension (``.png``, ``.svg`` …).  
+            If given, persists the figure.
+            *Matplotlib* → honours the extension (``.png``, ``.svg`` …).
             *Plotly*  → always saves an HTML file.
         show
-            ``True`` → render immediately (Jupyter, scripts).  
+            ``True`` → render immediately (Jupyter, scripts).
             ``False`` → suppress UI (good for batch pipelines).
         backend
             ``"matplotlib"`` (static, lightweight) or ``"plotly"`` (interactive).
@@ -1227,7 +1249,10 @@ class BinaryPerformanceEvaluator:
                 return {default_split: None}
             if isinstance(mapping, (list, tuple)):
                 return {default_split: list(mapping)}
-            return {k.lower(): (list(v) if v is not None else None) for k, v in mapping.items()}
+            return {
+                k.lower(): (list(v) if v is not None else None)
+                for k, v in mapping.items()
+            }
 
         reference = _prep(reference, "train")
         default_cmp = "test" if "test" in all_splits else "val"
@@ -1243,7 +1268,9 @@ class BinaryPerformanceEvaluator:
                     df = _filter_by_vintages(df, self.date_col, vint)
                 frames.append(df)
             return (
-                pd.concat(frames, axis=0, ignore_index=True) if frames else pd.DataFrame()
+                pd.concat(frames, axis=0, ignore_index=True)
+                if frames
+                else pd.DataFrame()
             )
 
         df_ref = _collect(reference)
@@ -1348,8 +1375,12 @@ class BinaryPerformanceEvaluator:
                     hist_cmp = counts_cmp * scale
             else:
                 widths = np.diff(edges)
-                p_ref = counts_ref / counts_ref.sum() if counts_ref.sum() else counts_ref
-                p_cmp = counts_cmp / counts_cmp.sum() if counts_cmp.sum() else counts_cmp
+                p_ref = (
+                    counts_ref / counts_ref.sum() if counts_ref.sum() else counts_ref
+                )
+                p_cmp = (
+                    counts_cmp / counts_cmp.sum() if counts_cmp.sum() else counts_cmp
+                )
                 if stat == "density":
                     hist_ref = p_ref / widths
                     hist_cmp = p_cmp / widths

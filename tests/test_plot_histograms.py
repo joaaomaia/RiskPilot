@@ -1,7 +1,9 @@
 import matplotlib
+
 matplotlib.use("Agg")
 
 import numpy as np
+import warnings
 import pandas as pd
 import scipy.stats
 import pytest
@@ -9,11 +11,16 @@ from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
 
 from riskpilot.evaluation import BinaryPerformanceEvaluator
-from riskpilot.evaluation.binary_performance_evaluator import _compute_psi
+from riskpilot.evaluation.binary_performance_evaluator import (
+    _compute_psi,
+    _filter_by_vintages,
+)
 
 
 def _split():
-    X, y = make_classification(n_samples=120, n_features=3, n_informative=2, n_redundant=0, random_state=0)
+    X, y = make_classification(
+        n_samples=120, n_features=3, n_informative=2, n_redundant=0, random_state=0
+    )
     df = pd.DataFrame(X, columns=["a", "b", "c"])
     df["target"] = y
     df["id"] = range(len(df))
@@ -60,3 +67,12 @@ def test_plot_histograms_errors():
             compare={"test": [209902]},
             show=False,
         )
+
+
+def test_filter_by_vintages_int():
+    train, _ = _split()
+    with warnings.catch_warnings(record=True) as w:
+        filtered = _filter_by_vintages(train, "date", [202001, 202002])
+    assert len(w) == 0
+    periods = filtered["date"].dt.to_period("M").unique().tolist()
+    assert periods == [pd.Period("2020-01"), pd.Period("2020-02")]
