@@ -1135,21 +1135,20 @@ class BinaryPerformanceEvaluator:
         normalize_to_reference: bool = True,
         highlight_drift: bool = True,
         drift_metric: Literal["psi", "ks"] | None = "psi",
+        kde: bool = True,
         alpha: float = 0.40,
         log_scale: bool = False,
         # Styling
         figsize: tuple[int, int] = (6, 4),
-        cmap_reference: str = "#3182bd",  # blue-ish
-        cmap_compare: str = "#fdae6b",  # orange-ish
+        cmap_reference: str = "#b4b5b6",  # cinza
+        cmap_compare: str = "#f88825",  # laranja
         # Output behaviour
         show_table: bool = True,
         save: str | Path | None = None,
         show: bool = True,
         backend: Literal["matplotlib", "plotly"] = "matplotlib",
     ) -> None:
-        """
-        Visualise distribution drift for one or more *numeric* features by overlaying
-        reference‐vs‐comparison histograms.
+        """Visualise distribution drift for one or more *numeric* features.
 
         Parameters
         ----------
@@ -1158,70 +1157,59 @@ class BinaryPerformanceEvaluator:
         reference, compare
             Mapping ``{split_name: [vintages]}`` or simply a list of vintages.
             * If *None*, defaults to ``{"train": None}`` and the first available
-            hold-out split (``"test"`` → ``"val"``) respectively.
-            * A value of ``None`` inside the mapping means “use **all** vintages in
-            that split”.
+            hold‑out split (``"test"`` → ``"val"``) respectively.
+            * A value of ``None`` inside the mapping means *all* vintages.
         bins
-            ``"auto"`` → Freedman–Diaconis rule (capped at 50).
-            Otherwise an explicit integer.
+            ``"auto"`` → Freedman–Diaconis rule (capped at 50) or explicit int.
         stat
-            ``"count"`` raw frequencies
-            ``"density"`` *pdf* (area = 1) · ``"probability"`` bin probabilities.
+            ``"count"`` raw frequencies | ``"density"`` pdf | ``"probability"`` bin probs.
         normalize_to_reference
-            When ``stat="count"``, rescales the *compare* histogram so both areas
-            match, making *shape* differences easier to see.
+            When ``stat='count'``, rescales *compare* so both areas match.
         highlight_drift
-            If ``True`` *and* ``stat="count"``, outlines bars whose absolute
-            difference exceeds ``2 × sqrt(ref + cmp)`` (Poisson approximation).
+            Outlines bars whose absolute diff exceeds ``2×sqrt(ref+cmp)``.
         drift_metric
-            ``"psi"`` or ``"ks"`` — value is appended to the legend. ``None`` omits.
+            ``"psi"`` or ``"ks"`` — value appended to legend. ``None`` omits.
+        kde
+            If ``True``, sobrepõe curva de densidade (Seaborn ``kdeplot``).
         alpha
             Transparency of the filled bars (0 = transparent).
         log_scale
-            Log-10 x-axis (useful for long-tailed amounts).
+            Log‑10 x‑axis (useful for long‑tailed amounts).
         figsize
             *Per subplot* size *(width, height)* in inches.
         cmap_reference, cmap_compare
             Colours for the two data sets (hex or any Matplotlib/Plotly spec).
         show_table
             Writes the metric value(s) under each subplot.
-        save
-            If given, persists the figure.
-            *Matplotlib* → honours the extension (``.png``, ``.svg`` …).
-            *Plotly*  → always saves an HTML file.
-        show
-            ``True`` → render immediately (Jupyter, scripts).
-            ``False`` → suppress UI (good for batch pipelines).
-        backend
-            ``"matplotlib"`` (static, lightweight) or ``"plotly"`` (interactive).
-
+        save, show, backend
+            Same semantics as versões anteriores.
         Notes
         -----
-        *Requires* private helpers:
-
-        - ``_filter_by_vintages(df, date_col, vintages)``
-        - ``_compute_psi(counts_ref, counts_cmp)``
-
-        Both already exist elsewhere in *BinaryPerformanceEvaluator*.
-
-        The function is **side-effect-free**: it only saves when *save* is
-        explicitly provided and never creates notebooks or image files otherwise.
+        *Requires* private helpers ``_filter_by_vintages`` and ``_compute_psi``.
         """
         # ------------------------------------------------------------------ #
-        # 0 ─ Imports kept inside to avoid hard dependency if user picks      #
-        #     different back-ends in other environments                       #
+        # 0 ─ Imports                                                       #
         # ------------------------------------------------------------------ #
         if backend == "matplotlib":
             import matplotlib.pyplot as plt
+            import seaborn as sns
+            # Tema limpo sem grid ‑ respeita estilo Seaborn
+            sns.set_theme(style="white", rc={"axes.grid": False})
         else:
             import plotly.graph_objects as go
             from plotly.subplots import make_subplots
-            from plotly.utils import PlotlyJSONEncoder  # noqa: F401  (used via go)
+            from plotly.utils import PlotlyJSONEncoder  # noqa: F401
 
+        import numpy as np
+        import pandas as pd
+        import math
+        import warnings
+        from pathlib import Path
+        from typing import Sequence, Literal
         from scipy import stats
 
         # ------------------------------------------------------------------ #
-        # 1 ─ Feature validation                                             #
+        # 1 ─ Feature validation                                            #
         # ------------------------------------------------------------------ #
         features = [feature] if isinstance(feature, str) else list(feature)
         missing = [f for f in features if f not in self.df_train.columns]
@@ -1237,22 +1225,18 @@ class BinaryPerformanceEvaluator:
             raise ValueError("`date_col` is required for vintage filtering.")
 
         # ------------------------------------------------------------------ #
-        # 2 ─ Prepare reference / compare DataFrames                         #
+        # 2 ─ Prepare reference / compare DataFrames                        #
         # ------------------------------------------------------------------ #
         all_splits = {"train": self.df_train, "test": self.df_test}
         if getattr(self, "df_val", None) is not None:
             all_splits["val"] = self.df_val
 
         def _prep(mapping, default_split):
-            """Normalise user input to a dict ‹split → vintages›."""
             if mapping is None:
                 return {default_split: None}
             if isinstance(mapping, (list, tuple)):
                 return {default_split: list(mapping)}
-            return {
-                k.lower(): (list(v) if v is not None else None)
-                for k, v in mapping.items()
-            }
+            return {k.lower(): (list(v) if v is not None else None) for k, v in mapping.items()}
 
         reference = _prep(reference, "train")
         default_cmp = "test" if "test" in all_splits else "val"
@@ -1267,11 +1251,7 @@ class BinaryPerformanceEvaluator:
                 if vint:
                     df = _filter_by_vintages(df, self.date_col, vint)
                 frames.append(df)
-            return (
-                pd.concat(frames, axis=0, ignore_index=True)
-                if frames
-                else pd.DataFrame()
-            )
+            return pd.concat(frames, axis=0, ignore_index=True) if frames else pd.DataFrame()
 
         df_ref = _collect(reference)
         df_cmp = _collect(compare)
@@ -1281,7 +1261,7 @@ class BinaryPerformanceEvaluator:
             return None
 
         # ------------------------------------------------------------------ #
-        # 3 ─ Subplot grid                                                   #
+        # 3 ─ Subplot grid                                                  #
         # ------------------------------------------------------------------ #
         n = len(features)
         ncols = 1 if n == 1 else 2
@@ -1304,7 +1284,7 @@ class BinaryPerformanceEvaluator:
             )
 
         # ------------------------------------------------------------------ #
-        # 4 ─ Helper: add a small text table/annotation with metric value    #
+        # 4 ─ Helper: table/annotation with metric value                    #
         # ------------------------------------------------------------------ #
         def _annotate(ax_or_fig, row_idx, col_idx, metric_str: str) -> None:
             if not show_table or not metric_str:
@@ -1321,7 +1301,7 @@ class BinaryPerformanceEvaluator:
                     align="center",
                     font=dict(size=10),
                 )
-            else:  # matplotlib
+            else:
                 words = metric_str.replace("=", " ").split()
                 rows = [words[i : i + 2] for i in range(0, len(words), 2)]
                 tbl = ax_or_fig.table(
@@ -1333,15 +1313,12 @@ class BinaryPerformanceEvaluator:
                 tbl.scale(1, 1.1)
 
         # ------------------------------------------------------------------ #
-        # 5 ─ Main loop over features                                        #
+        # 5 ─ Main loop over features                                       #
         # ------------------------------------------------------------------ #
         for idx, feat in enumerate(features):
             row = (idx // ncols) + 1
             col = (idx % ncols) + 1
-            if backend == "plotly":
-                ax = None  # not used, but kept for clarity
-            else:
-                ax = axes[row - 1, col - 1]
+            ax = None if backend == "plotly" else axes[row - 1, col - 1]
 
             # Prepare series
             ref_series = pd.to_numeric(df_ref[feat], errors="coerce").dropna()
@@ -1375,26 +1352,22 @@ class BinaryPerformanceEvaluator:
                     hist_cmp = counts_cmp * scale
             else:
                 widths = np.diff(edges)
-                p_ref = (
-                    counts_ref / counts_ref.sum() if counts_ref.sum() else counts_ref
-                )
-                p_cmp = (
-                    counts_cmp / counts_cmp.sum() if counts_cmp.sum() else counts_cmp
-                )
+                p_ref = counts_ref / counts_ref.sum() if counts_ref.sum() else counts_ref
+                p_cmp = counts_cmp / counts_cmp.sum() if counts_cmp.sum() else counts_cmp
                 if stat == "density":
                     hist_ref = p_ref / widths
                     hist_cmp = p_cmp / widths
-                else:  # probability
+                else:
                     hist_ref = p_ref
                     hist_cmp = p_cmp
 
-            # Bar centres / widths
             centres = edges[:-1] + np.diff(edges) / 2
-            # ``opacity`` is used by plotly whereas Matplotlib expects ``alpha``
             bar_kwargs = {"width": np.diff(edges)}
             bar_kwargs["opacity" if backend == "plotly" else "alpha"] = alpha
 
-            # Plot ----------------------------------------------------------------
+            # ------------------------------------------------------------------
+            # Plotting
+            # ------------------------------------------------------------------
             if backend == "plotly":
                 fig.add_bar(
                     x=centres,
@@ -1414,8 +1387,10 @@ class BinaryPerformanceEvaluator:
                     align="center",
                     **bar_kwargs,
                 )
+                if kde:
+                    sns.kdeplot(ref_series, ax=ax, color=cmap_reference, linewidth=1.4)
 
-            # Highlight drift bars (only meaningful for raw counts)
+            # Highlight drift bars
             edge_colours = None
             if highlight_drift and stat == "count":
                 scaled_cmp = counts_cmp * scale
@@ -1450,6 +1425,8 @@ class BinaryPerformanceEvaluator:
                     linewidth=1.5 if edge_colours else 0,
                     **bar_kwargs,
                 )
+                if kde:
+                    sns.kdeplot(cmp_series, ax=ax, color=cmap_compare, linewidth=1.4)
 
             # Metric --------------------------------------------------------------
             metric_str = ""
