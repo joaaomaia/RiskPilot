@@ -56,7 +56,6 @@ import pandas as pd
 import plotly.graph_objects as go
 import seaborn as sns
 
-
 try:
     from optbinning import OptimalBinning
 except ImportError:  # pragma: no cover - optional dependency
@@ -65,16 +64,13 @@ except ImportError:  # pragma: no cover - optional dependency
         "Optional dependency 'optbinning' is missing. "
         "Install with `pip install riskpilot[binning]`."
     )
-from sklearn.calibration import calibration_curve
 from sklearn.metrics import (
     average_precision_score,
     brier_score_loss,
-    confusion_matrix,
     matthews_corrcoef,
     precision_score,
     recall_score,
     roc_auc_score,
-    roc_curve,
 )
 
 from ..synthetic import LookAhead
@@ -247,7 +243,7 @@ class BinaryPerformanceEvaluator:
         Returns
         -------
         pd.DataFrame
-            • Modo padrão: índice "Split" com métricas globais.  
+            • Modo padrão: índice "Split" com métricas globais.
             • Modo `by_date_col=True`: MultiIndex ("Split", date_col) ordenado
             ascendentemente pelo campo de data.
         """
@@ -261,11 +257,17 @@ class BinaryPerformanceEvaluator:
             return {
                 "Split": split.capitalize(),
                 **({"Period": period} if period is not None else {}),
-                "MCC": matthews_corrcoef(y_true, (y_pred_proba >= self.threshold).astype(int)),
+                "MCC": matthews_corrcoef(
+                    y_true, (y_pred_proba >= self.threshold).astype(int)
+                ),
                 "AUC_ROC": roc_auc_score(y_true, y_pred_proba),
                 "AUC_PR": average_precision_score(y_true, y_pred_proba),
-                "Precision": precision_score(y_true, (y_pred_proba >= self.threshold).astype(int)),
-                "Recall": recall_score(y_true, (y_pred_proba >= self.threshold).astype(int)),
+                "Precision": precision_score(
+                    y_true, (y_pred_proba >= self.threshold).astype(int)
+                ),
+                "Recall": recall_score(
+                    y_true, (y_pred_proba >= self.threshold).astype(int)
+                ),
                 "Brier": brier_score_loss(y_true, y_pred_proba),
             }
 
@@ -445,10 +447,9 @@ class BinaryPerformanceEvaluator:
         title_prefix : str
             Prefixo do título; o nome do split é acrescentado.
         """
+        import matplotlib.pyplot as plt
         import numpy as np
-        import pandas as pd
-        import plotly.graph_objects as go
-        from plotly.subplots import make_subplots
+        import seaborn as sns
         from sklearn.metrics import confusion_matrix, roc_curve
 
         # ---------------- helpers ---------------- #
@@ -468,26 +469,39 @@ class BinaryPerformanceEvaluator:
             cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
             cm_pct = cm / cm.sum()
             heat = cm_pct if normalize else cm
-
-            fig = go.Figure(
-                data=go.Heatmap(
-                    z=heat,
-                    x=["Previsto 0", "Previsto 1"],
-                    y=["Real 0", "Real 1"],
-                    colorscale=cmap,
-                    zmin=0,
-                    zmax=heat.max() if heat.max() > 0 else 1,
-                    showscale=False,
-                )
+            annot = np.array(
+                [
+                    [f"{cm[i, j]}\n{cm_pct[i, j]:.1%}" for j in range(2)]
+                    for i in range(2)
+                ]
             )
-            fig.update_layout(title=title_prefix, template="plotly_white")
+
+            fig, ax = plt.subplots(figsize=figsize)
+            sns.heatmap(
+                heat,
+                annot=annot,
+                fmt="",
+                cmap=cmap,
+                cbar=False,
+                vmin=0,
+                vmax=heat.max() if heat.max() > 0 else 1,
+                ax=ax,
+            )
+            ax.set_xlabel("Previsto")
+            ax.set_ylabel("Real")
+            ax.set_xticklabels(["Previsto 0", "Previsto 1"])
+            ax.set_yticklabels(["Real 0", "Real 1"], rotation=0)
+            ax.set_title(title_prefix)
+            fig.tight_layout()
 
             if save and self.save_dir:
                 fname = title_prefix.lower().replace(" ", "_") + ".png"
-                fig.write_image(self.save_dir / fname)
+                fig.savefig(self.save_dir / fname, bbox_inches="tight")
 
             if display:
-                fig.show()
+                plt.show()
+            else:
+                plt.close(fig)
 
             return fig
 
@@ -512,42 +526,55 @@ class BinaryPerformanceEvaluator:
             threshold = _best_threshold(thr_y, thr_p, threshold.lower())
 
         n = len(splits)
-        fig = make_subplots(rows=1, cols=n, subplot_titles=[s.capitalize() for s in splits])
+        fig, axes = plt.subplots(1, n, figsize=(figsize[0] * n, figsize[1]))
+        if n == 1:
+            axes = [axes]
 
-        for c, split in enumerate(splits, 1):
+        for ax, split in zip(axes, splits):
             df_split = available[split]
             y_true_s = df_split[self.target_col].values
-            y_proba_s = self.model.predict_proba(df_split[self.predictor_cols])[:, pos_idx]
+            y_proba_s = self.model.predict_proba(df_split[self.predictor_cols])[
+                :, pos_idx
+            ]
             y_pred_s = (y_proba_s >= float(threshold)).astype(int)
 
             cm = confusion_matrix(y_true_s, y_pred_s, labels=[0, 1])
             cm_pct = cm / cm.sum()
             heat = cm_pct if normalize else cm
-
-            fig.add_trace(
-                go.Heatmap(
-                    z=heat,
-                    x=["Previsto 0", "Previsto 1"],
-                    y=["Real 0", "Real 1"],
-                    colorscale=cmap,
-                    zmin=0,
-                    zmax=heat.max() if heat.max() > 0 else 1,
-                    showscale=False,
-                ),
-                row=1, col=c,
+            annot = np.array(
+                [
+                    [f"{cm[i, j]}\n{cm_pct[i, j]:.1%}" for j in range(2)]
+                    for i in range(2)
+                ]
             )
 
-            fig.update_xaxes(title_text="Previsto", row=1, col=c)
-            fig.update_yaxes(title_text="Real", row=1, col=c)
+            sns.heatmap(
+                heat,
+                annot=annot,
+                fmt="",
+                cmap=cmap,
+                cbar=False,
+                vmin=0,
+                vmax=heat.max() if heat.max() > 0 else 1,
+                ax=ax,
+            )
+            ax.set_xlabel("Previsto")
+            ax.set_ylabel("Real")
+            ax.set_xticklabels(["Previsto 0", "Previsto 1"])
+            ax.set_yticklabels(["Real 0", "Real 1"], rotation=0)
+            ax.set_title(split.capitalize())
 
-        fig.update_layout(title=title_prefix, template="plotly_white", height=figsize[1]*80, width=figsize[0]*n*80)
+        fig.suptitle(title_prefix)
+        fig.tight_layout()
 
         if save and self.save_dir:
             fname = title_prefix.lower().replace(" ", "_") + ".png"
-            fig.write_image(self.save_dir / fname)
+            fig.savefig(self.save_dir / fname, bbox_inches="tight")
 
         if display:
-            fig.show()
+            plt.show()
+        else:
+            plt.close(fig)
 
         return fig
 
@@ -576,8 +603,6 @@ class BinaryPerformanceEvaluator:
         title : str
             Título do gráfico.
         """
-        import pandas as pd
-        import numpy as np
         import plotly.graph_objects as go
         from plotly.subplots import make_subplots
         from sklearn.calibration import calibration_curve
@@ -617,18 +642,43 @@ class BinaryPerformanceEvaluator:
 
         for c, (split, prob_pred, prob_true, brier) in enumerate(infos, 1):
             fig.add_trace(
-                go.Scatter(x=prob_pred, y=prob_true, mode="lines+markers", name="Modelo"),
-                row=1, col=c,
+                go.Scatter(
+                    x=prob_pred, y=prob_true, mode="lines+markers", name="Modelo"
+                ),
+                row=1,
+                col=c,
             )
             fig.add_trace(
-                go.Scatter(x=[0, 1], y=[0, 1], mode="lines", line=dict(dash="dash", color="grey"), showlegend=False),
-                row=1, col=c,
+                go.Scatter(
+                    x=[0, 1],
+                    y=[0, 1],
+                    mode="lines",
+                    line=dict(dash="dash", color="grey"),
+                    showlegend=False,
+                ),
+                row=1,
+                col=c,
             )
 
-            fig.update_xaxes(title_text="Probabilidade Prevista", range=[0, 1], row=1, col=c)
-            fig.update_yaxes(title_text="Frequência Observada", range=[0, 1], scaleanchor=f"x{c}", scaleratio=1, row=1, col=c)
+            fig.update_xaxes(
+                title_text="Probabilidade Prevista", range=[0, 1], row=1, col=c
+            )
+            fig.update_yaxes(
+                title_text="Frequência Observada",
+                range=[0, 1],
+                scaleanchor=f"x{c}",
+                scaleratio=1,
+                row=1,
+                col=c,
+            )
 
-        fig.update_layout(title=title, template="plotly_white", showlegend=False, height=400, width=400*n)
+        fig.update_layout(
+            title=title,
+            template="plotly_white",
+            showlegend=False,
+            height=400,
+            width=400 * n,
+        )
 
         if save and self.save_dir:
             fname = title.lower().replace(" ", "_") + ".png"
@@ -649,8 +699,8 @@ class BinaryPerformanceEvaluator:
         1) Bad-Rate por GH (hover unified)
         2) Participação de GHs (stacked bar)
         """
-        import pandas as pd
         import numpy as np
+        import pandas as pd
         import plotly.graph_objects as go
 
         # ---------- validações ----------
@@ -658,7 +708,11 @@ class BinaryPerformanceEvaluator:
             raise ValueError("`date_col` is required for plot_event_rate().")
 
         group_col = next(
-            (c for c in [self.group_col, self.group_col_] if c and c in self.data_.columns),
+            (
+                c
+                for c in [self.group_col, self.group_col_]
+                if c and c in self.data_.columns
+            ),
             None,
         )
         if group_col is None:
@@ -677,7 +731,8 @@ class BinaryPerformanceEvaluator:
 
         # ---------- GH ordem por Bad-Rate ----------
         br_order = (
-            df_all.groupby(group_col)[self.target_col].mean()
+            df_all.groupby(group_col)[self.target_col]
+            .mean()
             .sort_values(ascending=False)
         )
         gh_label = {g: f"GH{idx+1}" for idx, g in enumerate(br_order.index)}
@@ -692,7 +747,8 @@ class BinaryPerformanceEvaluator:
             .sort_index()
         )
         counts = (
-            df_all.groupby([self.date_col, group_col]).size()
+            df_all.groupby([self.date_col, group_col])
+            .size()
             .unstack(group_col)
             .reindex(columns=groups_sorted, fill_value=0)
             .sort_index()
@@ -723,8 +779,7 @@ class BinaryPerformanceEvaluator:
                         # Cabeçalho de safra fica por conta do hover unified
                         "Bad Rate: %{y:.2%}<br>"
                         "Volume: %{customdata[1]}<br>"
-                        "Intervalo: " + str(g) +
-                        "<extra></extra><br>"        # não remover!
+                        "Intervalo: " + str(g) + "<extra></extra><br>"  # não remover!
                     ),
                 )
             )
@@ -733,7 +788,7 @@ class BinaryPerformanceEvaluator:
                 yaxis_title="Bad Rate",
                 xaxis_title="Safra",
                 template="plotly_white",
-                hovermode="x unified",   # mostra todos os GHs juntos
+                hovermode="x unified",  # mostra todos os GHs juntos
                 xaxis_showgrid=False,
                 yaxis_showgrid=False,
                 yaxis_tickformat=".0%",  # 1 casa decimal
@@ -760,7 +815,7 @@ class BinaryPerformanceEvaluator:
             )
         fig_share.update_layout(
             barmode="stack",
-            #bargap=0.05,  # 👈 barras mais próximas (não funciona bem com datas)
+            # bargap=0.05,  # 👈 barras mais próximas (não funciona bem com datas)
             title="Participação dos GHs",
             yaxis_title="Participação",
             yaxis_tickformat=".0%",
@@ -790,10 +845,10 @@ class BinaryPerformanceEvaluator:
         title: str = "",
         feature: Optional[str] = None,
         smart_view: bool = False,
-        psi_threshold: float = 0.10,   # usado quando smart_view=True
+        psi_threshold: float = 0.10,  # usado quando smart_view=True
     ) -> Union[
-        tuple[go.Figure, pd.DataFrame],               # quando feature != None
-        tuple[Dict[str, go.Figure], pd.DataFrame],    # quando feature == None
+        tuple[go.Figure, pd.DataFrame],  # quando feature != None
+        tuple[Dict[str, go.Figure], pd.DataFrame],  # quando feature == None
     ]:
         """
         PSI por variável ao longo do tempo.
@@ -801,7 +856,7 @@ class BinaryPerformanceEvaluator:
         Parameters
         ----------
         feature : str | None
-            • None  → gera um gráfico para **cada** variável.  
+            • None  → gera um gráfico para **cada** variável.
             • "var" → gera gráfico só para essa variável.
         smart_view : bool, default False
             Se True, inclui somente variáveis cujo PSI >= `psi_threshold`
@@ -809,6 +864,7 @@ class BinaryPerformanceEvaluator:
         """
 
         import warnings
+
         import numpy as np
         import pandas as pd
         import plotly.graph_objects as go
@@ -827,17 +883,21 @@ class BinaryPerformanceEvaluator:
             if bin_strategy.get("type") == "quantile":
                 try:
                     _, edges = pd.qcut(
-                        ser, q=bin_strategy.get("n_bins", 10),
-                        retbins=True, duplicates="drop"
+                        ser,
+                        q=bin_strategy.get("n_bins", 10),
+                        retbins=True,
+                        duplicates="drop",
                     )
                 except ValueError:
                     edges = np.linspace(
-                        ser.min(), ser.max(),
+                        ser.min(),
+                        ser.max(),
                         bin_strategy.get("n_bins", 10) + 1,
                     )
             else:
                 edges = np.linspace(
-                    ser.min(), ser.max(),
+                    ser.min(),
+                    ser.max(),
                     bin_strategy.get("n_bins", 10) + 1,
                 )
             edges[0] = min(edges[0], ser.min())
@@ -877,7 +937,8 @@ class BinaryPerformanceEvaluator:
 
         for split_name, df in splits:
             periods = (
-                pd.to_datetime(df[self.date_col]).dt.to_period("M")
+                pd.to_datetime(df[self.date_col])
+                .dt.to_period("M")
                 .sort_values()
                 .unique()
             )
@@ -890,7 +951,9 @@ class BinaryPerformanceEvaluator:
                 p_ref = counts_ref / counts_ref.sum()
 
                 for period in periods:
-                    subset = df[pd.to_datetime(df[self.date_col]).dt.to_period("M") == period]
+                    subset = df[
+                        pd.to_datetime(df[self.date_col]).dt.to_period("M") == period
+                    ]
                     if len(subset) < min_obs:
                         continue
                     ser = pd.to_numeric(subset[var], errors="coerce").dropna()
@@ -952,7 +1015,7 @@ class BinaryPerformanceEvaluator:
                 fig.add_hline(
                     y=yline,
                     line=dict(color=color, dash="dash", width=1),
-                    opacity=0.4,                                 # 👈 fora do dict line
+                    opacity=0.4,  # 👈 fora do dict line
                     annotation_text=f"{yline:.2f}",
                     annotation_position="top right",
                     annotation_font_color=color,
@@ -1248,10 +1311,11 @@ class BinaryPerformanceEvaluator:
         """
 
         import warnings
-        from sklearn.metrics import roc_curve
+
         import numpy as np
         import pandas as pd
         import plotly.graph_objects as go
+        from sklearn.metrics import roc_curve
 
         if self.date_col is None:
             raise ValueError("`date_col` é obrigatório para plot_ks().")
@@ -1278,7 +1342,9 @@ class BinaryPerformanceEvaluator:
             df["Safra"] = pd.to_datetime(df[self.date_col]).dt.to_period("M")
             for safra, grp in df.groupby("Safra", sort=True):
                 y_true = grp[self.target_col].values
-                y_pred = self.model.predict_proba(grp[self.predictor_cols])[:, self._pos_class_idx]
+                y_pred = self.model.predict_proba(grp[self.predictor_cols])[
+                    :, self._pos_class_idx
+                ]
                 ks = ks_stat(y_true, y_pred)
                 ks_records.append(
                     {
@@ -1297,7 +1363,11 @@ class BinaryPerformanceEvaluator:
 
         # ------- plotly --------
         fig = go.Figure()
-        for split, color in [("Train", "#7f7f7f"), ("Test", "#d62728"), ("Val", "#1f77b4")]:
+        for split, color in [
+            ("Train", "#7f7f7f"),
+            ("Test", "#d62728"),
+            ("Val", "#1f77b4"),
+        ]:
             grp = ks_df[ks_df["Split"] == split]
             if grp.empty:
                 continue
@@ -1332,7 +1402,7 @@ class BinaryPerformanceEvaluator:
             yaxis_title="KS",
             yaxis_tickformat=".2f",
             xaxis=dict(showgrid=False),
-            yaxis=dict(showgrid=False, range=[0, max(0.05, ks_df['KS'].max() * 1.1)]),
+            yaxis=dict(showgrid=False, range=[0, max(0.05, ks_df["KS"].max() * 1.1)]),
             template="plotly_white",
         )
 
@@ -1433,12 +1503,13 @@ class BinaryPerformanceEvaluator:
         Novidades
         ---------
         • Escala do eixo *radial* agora é **fixa** para todos os gráficos,
-        evitando “encolher/esticar” quando GHs mudam.  
-        • Todos os gráficos usam **height = 800** e **width = 1200**.  
+        evitando “encolher/esticar” quando GHs mudam.
+        • Todos os gráficos usam **height = 800** e **width = 1200**.
         • Hover mostra Split e Volume; eixo radial oculto.
         """
 
-        import pandas as pd, numpy as np, plotly.graph_objects as go
+        import pandas as pd
+        import plotly.graph_objects as go
         from plotly.subplots import make_subplots
 
         # ------------------- validações -------------------
@@ -1453,7 +1524,7 @@ class BinaryPerformanceEvaluator:
             .mean()
             .sort_values(ascending=False)
         )
-        gh_order  = list(br.index)                # pior → melhor
+        gh_order = list(br.index)  # pior → melhor
         gh_to_num = {g: i + 1 for i, g in enumerate(gh_order)}
         num_to_gh = {v: k for k, v in gh_to_num.items()}
 
@@ -1476,10 +1547,7 @@ class BinaryPerformanceEvaluator:
         else:
             cols = [c for c in features if c in self.predictor_cols]
 
-        feats = [
-            c for c in cols
-            if pd.api.types.is_numeric_dtype(self.data_[c])
-        ]
+        feats = [c for c in cols if pd.api.types.is_numeric_dtype(self.data_[c])]
         if not feats:
             raise ValueError("No numeric features available for radar plot.")
 
@@ -1491,7 +1559,10 @@ class BinaryPerformanceEvaluator:
 
         # ---------------- escala global -------------------
         scaled_global = _scale(self.data_)
-        r_min, r_max = scaled_global[feats].min().min(), scaled_global[feats].max().max()
+        r_min, r_max = (
+            scaled_global[feats].min().min(),
+            scaled_global[feats].max().max(),
+        )
 
         # ---------------- volume helper -------------------
         def _vol(df, g_int):
@@ -1503,15 +1574,18 @@ class BinaryPerformanceEvaluator:
         if animation:
             periods = (
                 pd.to_datetime(self.data_[self.date_col])
-                .dt.to_period("M").sort_values().unique()
+                .dt.to_period("M")
+                .sort_values()
+                .unique()
             )
             if not len(periods):
                 raise ValueError("Nenhum período para animação.")
 
             n_gh = len(groups_int)
             fig = make_subplots(
-                rows=1, cols=n_gh,
-                specs=[[{"type": "polar"}]*n_gh],
+                rows=1,
+                cols=n_gh,
+                specs=[[{"type": "polar"}] * n_gh],
                 subplot_titles=[f"GH{n}" for n in groups_num],
             )
 
@@ -1521,48 +1595,87 @@ class BinaryPerformanceEvaluator:
                     theta = feats + [feats[0]]
                     for split in splits:
                         df_s = all_splits[split]
-                        mask = (pd.to_datetime(df_s[self.date_col]).dt.to_period("M") == per)
+                        mask = (
+                            pd.to_datetime(df_s[self.date_col]).dt.to_period("M") == per
+                        )
                         df_s = df_s[mask]
                         if df_s.empty or g_int not in df_s[self.group_col_].values:
                             continue
-                        mean_row = _scale(df_s).groupby(
-                            df_s[self.group_col_])[feats].mean().loc[g_int]
+                        mean_row = (
+                            _scale(df_s)
+                            .groupby(df_s[self.group_col_])[feats]
+                            .mean()
+                            .loc[g_int]
+                        )
                         r_vals = mean_row.tolist() + [mean_row[feats[0]]]
-                        traces.append(go.Scatterpolar(
-                            r=r_vals, theta=theta, subplot=f"polar{idx}",
-                            name=f"GH{g_num} ({split})",
-                            line=dict(color=_rgba(self.group_palette_[g_int], .8)),
-                            fill="toself",
-                            fillcolor=_rgba(self.group_palette_[g_int], .25),
-                            customdata=[_vol(df_s, g_int)]*len(r_vals),
-                            hovertemplate=(
-                                f"Safra: {per.strftime('%Y%m')}<br>"
-                                f"Split: {split.capitalize()}<br>"
-                                "Volume: %{customdata:,}<extra></extra>"
-                            ),
-                            showlegend=False,
-                        ))
+                        traces.append(
+                            go.Scatterpolar(
+                                r=r_vals,
+                                theta=theta,
+                                subplot=f"polar{idx}",
+                                name=f"GH{g_num} ({split})",
+                                line=dict(color=_rgba(self.group_palette_[g_int], 0.8)),
+                                fill="toself",
+                                fillcolor=_rgba(self.group_palette_[g_int], 0.25),
+                                customdata=[_vol(df_s, g_int)] * len(r_vals),
+                                hovertemplate=(
+                                    f"Safra: {per.strftime('%Y%m')}<br>"
+                                    f"Split: {split.capitalize()}<br>"
+                                    "Volume: %{customdata:,}<extra></extra>"
+                                ),
+                                showlegend=False,
+                            )
+                        )
                 return traces
 
-            frames = [go.Frame(data=_frame(per), name=per.strftime("%Y-%m")) for per in periods]
+            frames = [
+                go.Frame(data=_frame(per), name=per.strftime("%Y-%m"))
+                for per in periods
+            ]
             fig.add_traces(frames[0].data)
             fig.frames = frames
 
             # fixa escala
             fig.update_layout(
-                **{f"polar{i}": dict(radialaxis=dict(visible=False, range=[r_min, r_max]))
-                for i in range(1, n_gh+1)},
+                **{
+                    f"polar{i}": dict(
+                        radialaxis=dict(visible=False, range=[r_min, r_max])
+                    )
+                    for i in range(1, n_gh + 1)
+                },
                 template="plotly_white",
                 title=title or "Evolução mensal",
-                height=800, width=1200,
-                updatemenus=[dict(
-                    type="buttons", direction="left", x=0.1, y=1.1,
-                    buttons=[
-                        dict(label="Play", method="animate",
-                            args=[None, {"frame": {"duration": 600, "redraw": True}, "fromcurrent": True}]),
-                        dict(label="Pause", method="animate",
-                            args=[[None], {"frame": {"duration": 0}, "mode": "immediate"}]),
-                    ])]
+                height=800,
+                width=1200,
+                updatemenus=[
+                    dict(
+                        type="buttons",
+                        direction="left",
+                        x=0.1,
+                        y=1.1,
+                        buttons=[
+                            dict(
+                                label="Play",
+                                method="animate",
+                                args=[
+                                    None,
+                                    {
+                                        "frame": {"duration": 600, "redraw": True},
+                                        "fromcurrent": True,
+                                    },
+                                ],
+                            ),
+                            dict(
+                                label="Pause",
+                                method="animate",
+                                args=[
+                                    [None],
+                                    {"frame": {"duration": 0}, "mode": "immediate"},
+                                ],
+                            ),
+                        ],
+                    )
+                ],
             )
             if save and self.save_dir:
                 fig.write_html(self.save_dir / "group_radar_animation.html")
@@ -1571,41 +1684,58 @@ class BinaryPerformanceEvaluator:
         # ==================================================
         #              estáticos (combined / sep)
         # ==================================================
-        mean_split = {s: _scale(df).groupby(df[self.group_col_])[feats].mean()
-                    for s, df in all_splits.items()}
+        mean_split = {
+            s: _scale(df).groupby(df[self.group_col_])[feats].mean()
+            for s, df in all_splits.items()
+        }
 
         def _polar_cfg(n):
-            return {f"polar{i}": dict(radialaxis=dict(visible=False, range=[r_min, r_max]))
-                    for i in range(1, n+1)}
+            return {
+                f"polar{i}": dict(radialaxis=dict(visible=False, range=[r_min, r_max]))
+                for i in range(1, n + 1)
+            }
 
         # -------- combinado ----------
         if not separated:
             n_cols = len(splits)
-            fig = make_subplots(rows=1, cols=n_cols,
-                                specs=[[{"type":"polar"}]*n_cols],
-                                subplot_titles=[s.capitalize() for s in splits])
+            fig = make_subplots(
+                rows=1,
+                cols=n_cols,
+                specs=[[{"type": "polar"}] * n_cols],
+                subplot_titles=[s.capitalize() for s in splits],
+            )
             for c, split in enumerate(splits, 1):
                 for g_int, g_num in zip(reversed(groups_int), reversed(groups_num)):
                     if g_int not in mean_split[split].index:
                         continue
                     theta = feats + [feats[0]]
-                    r_vals = mean_split[split].loc[g_int].tolist()+[mean_split[split].loc[g_int,feats[0]]]
-                    fig.add_trace(go.Scatterpolar(
-                        r=r_vals, theta=theta, subplot=f"polar{c}",
-                        name=f"GH{g_num}",
-                        line=dict(color=_rgba(self.group_palette_[g_int], .8)),
-                        fill="toself", fillcolor=_rgba(self.group_palette_[g_int], .25),
-                        customdata=[_vol(all_splits[split], g_int)]*len(r_vals),
-                        hovertemplate=(
-                            f"GH{g_num}<br>Split: {split.capitalize()}<br>"
-                            "Volume: %{customdata:,}<extra></extra>"
+                    r_vals = mean_split[split].loc[g_int].tolist() + [
+                        mean_split[split].loc[g_int, feats[0]]
+                    ]
+                    fig.add_trace(
+                        go.Scatterpolar(
+                            r=r_vals,
+                            theta=theta,
+                            subplot=f"polar{c}",
+                            name=f"GH{g_num}",
+                            line=dict(color=_rgba(self.group_palette_[g_int], 0.8)),
+                            fill="toself",
+                            fillcolor=_rgba(self.group_palette_[g_int], 0.25),
+                            customdata=[_vol(all_splits[split], g_int)] * len(r_vals),
+                            hovertemplate=(
+                                f"GH{g_num}<br>Split: {split.capitalize()}<br>"
+                                "Volume: %{customdata:,}<extra></extra>"
+                            ),
                         ),
-                    ), row=1, col=c)
+                        row=1,
+                        col=c,
+                    )
             fig.update_layout(
                 **_polar_cfg(n_cols),
                 template="plotly_white",
                 title=title or "Radar – GHs combinados",
-                height=800, width=1200,
+                height=800,
+                width=1200,
                 legend_title="Grupos Homogêneos",
             )
             if save and self.save_dir:
@@ -1616,31 +1746,44 @@ class BinaryPerformanceEvaluator:
         figs = {}
         for g_int, g_num in zip(groups_int, groups_num):
             n_cols = len(splits)
-            fig = make_subplots(rows=1, cols=n_cols,
-                                specs=[[{"type":"polar"}]*n_cols],
-                                subplot_titles=[s.capitalize() for s in splits])
+            fig = make_subplots(
+                rows=1,
+                cols=n_cols,
+                specs=[[{"type": "polar"}] * n_cols],
+                subplot_titles=[s.capitalize() for s in splits],
+            )
             for c, split in enumerate(splits, 1):
                 if g_int not in mean_split[split].index:
                     continue
                 theta = feats + [feats[0]]
-                r_vals = mean_split[split].loc[g_int].tolist()+[mean_split[split].loc[g_int,feats[0]]]
-                fig.add_trace(go.Scatterpolar(
-                    r=r_vals, theta=theta, subplot=f"polar{c}",
-                    name=f"GH{g_num}",
-                    line=dict(color=_rgba(self.group_palette_[g_int], .8)),
-                    fill="toself", fillcolor=_rgba(self.group_palette_[g_int], .25),
-                    customdata=[_vol(all_splits[split], g_int)]*len(r_vals),
-                    hovertemplate=(
-                        f"Split: {split.capitalize()}<br>"
-                        "Volume: %{customdata:,}<extra></extra>"
+                r_vals = mean_split[split].loc[g_int].tolist() + [
+                    mean_split[split].loc[g_int, feats[0]]
+                ]
+                fig.add_trace(
+                    go.Scatterpolar(
+                        r=r_vals,
+                        theta=theta,
+                        subplot=f"polar{c}",
+                        name=f"GH{g_num}",
+                        line=dict(color=_rgba(self.group_palette_[g_int], 0.8)),
+                        fill="toself",
+                        fillcolor=_rgba(self.group_palette_[g_int], 0.25),
+                        customdata=[_vol(all_splits[split], g_int)] * len(r_vals),
+                        hovertemplate=(
+                            f"Split: {split.capitalize()}<br>"
+                            "Volume: %{customdata:,}<extra></extra>"
+                        ),
+                        showlegend=False,
                     ),
-                    showlegend=False,
-                ), row=1, col=c)
+                    row=1,
+                    col=c,
+                )
             fig.update_layout(
                 **_polar_cfg(n_cols),
                 template="plotly_white",
                 title=f"{title or 'Radar'} – GH{g_num}",
-                height=800, width=1200,
+                height=800,
+                width=1200,
             )
             figs[g_num] = fig
             if save and self.save_dir:
@@ -1892,8 +2035,7 @@ class BinaryPerformanceEvaluator:
         save: bool = False,
         raise_on_empty: bool = True,
     ) -> (
-        tuple[list[go.Figure] | go.Figure, dict[str, Any]]
-        | tuple[None, dict[str, Any]]
+        tuple[list[go.Figure] | go.Figure, dict[str, Any]] | tuple[None, dict[str, Any]]
     ):
         """Visualize contract migration between GHs using Sankey diagrams.
 
@@ -1925,7 +2067,6 @@ class BinaryPerformanceEvaluator:
             ``(None, {})`` is returned instead.
         """
 
-        import numpy as np
         import pandas as pd
         import plotly.graph_objects as go
 
