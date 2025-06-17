@@ -1057,9 +1057,7 @@ ortools==9.12.4544 \
     --hash=sha256:e33598960fbea63cb087a078a657153cb8ed963bf818d730b9b38f1ba6dad62e \
     --hash=sha256:ef58e80d19b5215849c008e9b64edf158cb00b893c8a4adf2c7a1510bb3776d8 \
     --hash=sha256:fb3348008c74a691e3d0ca64941e7227aaf83739299aecf68ec00772d513528f
-    # via
-    #   optbinning
-    #   riskpilot (pyproject.toml)
+    # via optbinning
 osqp==1.0.4 \
     --hash=sha256:06dc3c6d7a0e2d4552dbc98a127e6d9a70d57ab856c8343c83aca42817ee8da3 \
     --hash=sha256:0877552e325ff4cc1c676796ba482904eb4b66e750eff5b91df3273201f5ed00 \

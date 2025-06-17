@@ -40,7 +40,7 @@ dev = [
 model = [
     "xgboost>=1.7.6",
     "lightgbm>=4.6.0",
-    "ortools==9.12.*"   # <= compatível com cvxpy 1.6.x
+    "ortools>=9.11.0,<9.12; python_version < '3.13'"   # Instala OR-Tools 9.11.* apenas quando Python < 3.13
 ]
 
 [tool.hatch.build.targets.wheel]
