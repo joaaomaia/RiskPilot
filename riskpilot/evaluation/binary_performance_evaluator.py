@@ -270,74 +270,75 @@ class BinaryPerformanceEvaluator:
         self,
         *,
         by_date_col: bool = False,
+        score_higher_is_positive: bool | None = None,
     ) -> pd.DataFrame:
-        """
-        Calcula métricas globais ou por safra (date_col).
+        """Calcula métricas globais ou por safra.
 
-        Parameters
-        ----------
-        by_date_col : bool, default False
-            Se True, as métricas são computadas por período usando `self.date_col`.
-
-        Returns
-        -------
-        pd.DataFrame
-            • Modo padrão: índice "Split" com métricas globais.
-            • Modo `by_date_col=True`: MultiIndex ("Split", date_col) ordenado
-            ascendentemente pelo campo de data.
+        Se ``score_higher_is_positive`` for:
+        - ``True``  → valores maiores indicam maior chance do evento (target==1)
+        - ``False`` → valores maiores indicam menor chance do evento (target==1)
+        - ``None``  → tenta detectar automaticamente via AUC‑ROC; se < 0.5
+                       o vetor de probabilidades será invertido ``1‑p``.
         """
 
-        # ---------------- helper ------------------------------------ #
+        # ------------- helper ------------------------------------- #
         def _row(df_slice: pd.DataFrame, split: str, period=None) -> dict:
-            """Retorna dicionário de métricas para o slice informado."""
             y_true = df_slice[self.target_col].values
-            y_pred_proba = df_slice[self.score_col_].values
+            proba = df_slice[self.score_col_].values
+
+            # --- orientação dos scores ---
+            if score_higher_is_positive is True:
+                proba_evt = proba
+            elif score_higher_is_positive is False:
+                proba_evt = 1.0 - proba
+            else:  # auto‑detect
+                auc_raw = roc_auc_score(y_true, proba)
+                if auc_raw < 0.5:
+                    proba_evt = 1.0 - proba
+                else:
+                    proba_evt = proba
+
+            # --- binário pela regra de corte ---
+            y_pred = (proba_evt >= self.threshold).astype(int)
 
             return {
                 "Split": split.capitalize(),
                 **({"Period": period} if period is not None else {}),
-                "MCC": matthews_corrcoef(
-                    y_true, (y_pred_proba >= self.threshold).astype(int)
-                ),
-                "AUC_ROC": roc_auc_score(y_true, y_pred_proba),
-                "AUC_PR": average_precision_score(y_true, y_pred_proba),
-                "Precision": precision_score(
-                    y_true, (y_pred_proba >= self.threshold).astype(int)
-                ),
-                "Recall": recall_score(
-                    y_true, (y_pred_proba >= self.threshold).astype(int)
-                ),
-                "Brier": brier_score_loss(y_true, y_pred_proba),
+                "MCC": matthews_corrcoef(y_true, y_pred),
+                "AUC_ROC": roc_auc_score(y_true, proba_evt),
+                "AUC_PR": average_precision_score(y_true, proba_evt),
+                "Precision": precision_score(y_true, y_pred),
+                "Recall": recall_score(y_true, y_pred),
+                "Brier": brier_score_loss(y_true, proba_evt),
             }
 
-        # ---------------- splits ------------------------------------ #
+        # ------------- splits ------------------------------------- #
         splits = {"train": self.df_train, "test": self.df_test}
-        if self.df_val is not None:
+        if getattr(self, "df_val", None) is not None:
             splits["val"] = self.df_val
 
         date_col = self.date_col if by_date_col else None
         if by_date_col and not date_col:
             raise ValueError("`date_col` precisa ser definido para by_date_col=True.")
 
-        records = []
+        records: list[dict] = []
         for split_name, df in splits.items():
             if by_date_col and date_col in df.columns:
-                # garante ordenação ascendente por safra
-                df_sorted = df.sort_values(date_col)
-                for period, df_period in df_sorted.groupby(date_col, sort=True):
+                for period, df_period in df.sort_values(date_col).groupby(date_col, sort=True):
                     records.append(_row(df_period, split_name, period))
             else:
                 records.append(_row(df, split_name))
 
         metrics_df = pd.DataFrame(records)
 
-        # ---------------- index -------------------------------------- #
-        if by_date_col and "Period" in metrics_df.columns:
+        # ---- índice ------------------------------------------------ #
+        if by_date_col:
             metrics_df.set_index(["Split", "Period"], inplace=True)
         else:
             metrics_df.set_index("Split", inplace=True)
 
         return metrics_df
+    
 
     def run_stress_test(
         self,
@@ -740,10 +741,25 @@ class BinaryPerformanceEvaluator:
         *,
         save: bool = False,
         title: str = "",
+        custom_colors: list[str] | None = None,
     ) -> tuple[go.Figure, go.Figure]:
         """
-        1) Bad-Rate por GH (hover unified)
+        1) Bad‑Rate por GH (hover unified)
         2) Participação de GHs (stacked bar)
+
+        Parameters
+        ----------
+        save : bool, default False
+            Salva PNG em ``self.save_dir`` quando definido.
+        title : str, optional
+            Título base para o gráfico de Bad‑Rate.
+        custom_colors : list[str] | None, optional
+            Lista de *hex codes* (ex.: ``["#1f77b4", "#ff7f0e", ...]``)
+            aplicados **na ordem** dos GHs classificados por Bad‑Rate — isto é,
+            ``custom_colors[0]`` colore o GH1 (maior Bad‑Rate),
+            ``custom_colors[1]`` o GH2 e assim por diante. Caso a lista contenha
+            menos cores que grupos, os GHs restantes recebem as cores da paleta
+            automática gerada por :meth:`_compute_group_palette`.
         """
         import numpy as np
         import pandas as pd
@@ -775,7 +791,7 @@ class BinaryPerformanceEvaluator:
         )
         df_all[self.date_col] = pd.to_datetime(df_all[self.date_col])
 
-        # ---------- GH ordem por Bad-Rate ----------
+        # ---------- GH ordem por Bad‑Rate ----------
         br_order = (
             df_all.groupby(group_col)[self.target_col]
             .mean()
@@ -803,14 +819,24 @@ class BinaryPerformanceEvaluator:
 
         # ---------- cores ----------
         self._compute_group_palette()
-        colors = self.group_palette_ or {}
+        base_colors = self.group_palette_ or {}
 
-        # ---------- figura Bad-Rate ----------
+        # mapeia custom_colors → grupos (ordem por Bad‑Rate desc.)
+        override = {}
+        if custom_colors:
+            for grp, col_hex in zip(groups_sorted, custom_colors):
+                if isinstance(col_hex, str) and col_hex:
+                    override[grp] = col_hex
+
+        # combina paletas: custom sobrepõe automático
+        colors = {**base_colors, **override}
+
+        # ---------- figura Bad‑Rate ----------
         fig_rate = go.Figure()
         for g in groups_sorted:
-            periods = pivot_br.index.strftime("%Y%m")
-            vols = counts[g].apply(lambda v: f"{v:,}".replace(",", "."))
-            custom = np.stack([periods, vols], axis=-1)
+            periods_fmt = pivot_br.index.strftime("%Y%m")
+            vols_fmt = counts[g].apply(lambda v: f"{v:,}".replace(",", "."))
+            custom = np.stack([periods_fmt, vols_fmt], axis=-1)
 
             fig_rate.add_trace(
                 go.Scatter(
@@ -822,24 +848,24 @@ class BinaryPerformanceEvaluator:
                     marker=dict(color=colors.get(g)),
                     customdata=custom,  # [[safra, volume_fmt]]
                     hovertemplate=(
-                        # Cabeçalho de safra fica por conta do hover unified
                         "Bad Rate: %{y:.2%}<br>"
                         "Volume: %{customdata[1]}<br>"
-                        "Intervalo: " + str(g) + "<extra></extra><br>"  # não remover!
+                        f"Intervalo: {g}<extra></extra><br>"
                     ),
                 )
             )
-            fig_rate.update_layout(
-                title=title or "Bad Rate por GH",
-                yaxis_title="Bad Rate",
-                xaxis_title="Safra",
-                template="plotly_white",
-                hovermode="x unified",  # mostra todos os GHs juntos
-                xaxis_showgrid=False,
-                yaxis_showgrid=False,
-                yaxis_tickformat=".0%",  # 1 casa decimal
-                legend_title="Grupos Homogêneos",
-            )
+
+        fig_rate.update_layout(
+            title=title or "Bad Rate por GH",
+            yaxis_title="Bad Rate",
+            xaxis_title="Safra",
+            template="plotly_white",
+            hovermode="x unified",
+            xaxis_showgrid=False,
+            yaxis_showgrid=False,
+            yaxis_tickformat=".0%",
+            legend_title="Grupos Homogêneos",
+        )
 
         # ---------- figura Participação ----------
         fig_share = go.Figure()
@@ -855,13 +881,12 @@ class BinaryPerformanceEvaluator:
                         "Safra: %{x|%Y%m}<br>"
                         "Participação: %{y:.1%}<br>"
                         "Volume: %{customdata:,}<br>"
-                        "Intervalo: " + str(g) + "<extra></extra>"
+                        f"Intervalo: {g}<extra></extra>"
                     ),
                 )
             )
         fig_share.update_layout(
             barmode="stack",
-            # bargap=0.05,  # 👈 barras mais próximas (não funciona bem com datas)
             title="Participação dos GHs",
             yaxis_title="Participação",
             yaxis_tickformat=".0%",
@@ -878,6 +903,7 @@ class BinaryPerformanceEvaluator:
             fig_share.write_image(self.save_dir / "group_share.png")
 
         return fig_rate, fig_share
+
 
     def plot_psi(
         self,
@@ -1121,6 +1147,7 @@ class BinaryPerformanceEvaluator:
 
         return global_fig, psi_df
 
+
     def plot_histograms(  # noqa: C901
         self,
         feature: str | Sequence[str],
@@ -1145,23 +1172,27 @@ class BinaryPerformanceEvaluator:
         figsize: tuple[int, int] = (6, 4),
         cmap_reference: str = "#b4b5b6",      # cinza
         cmap_compare: str = "#f88825",        # laranja
+        show_metric: bool = True,              # ⬅️  nova anotação discreta
+        show_legend: bool = True,              # ⬅️  liga/desliga legenda
+        # Retro‑compatibilidade
+        show_table: bool | None = None,        # obsoleto – mantém assinatura
         # Output behaviour
-        show_table: bool = False,             # ⬅ agora desabilitado por padrão
         save: str | Path | None = None,
         show: bool = True,
         backend: Literal["matplotlib", "plotly"] = "matplotlib",
     ) -> None:
-        """Visualise distribution drift for one or more *numeric* features.
+        """Visualize distribution drift for one or more *numeric* features.
 
-        New parameters
-        --------------
-        bars : bool, default True
-            Draw histogram bars. When ``False`` only KDE (if enabled) is shown.
-        kde_fill_alpha : float | None
-            When provided (0‒1), fills the area under the KDE curve with the
-            specified opacity.
+        Novos parâmetros
+        ----------------
+        show_metric : bool, default True
+            Exibe a métrica (*PSI* ou *KS*) como texto discreto no canto
+            superior‑direito do subplot.
+        show_legend : bool, default True
+            Exibe a legenda "Reference" / "Compare".
 
-        All other semantics remain the same.
+        O parâmetro *show_table* passa a ser **obsoleto**; se for ``True`` para
+        fins de retro‑compatibilidade, a anotação textual também será mostrada.
         """
         # ------------------------------------------------------------------ #
         # 0 ─ Imports                                                       #
@@ -1243,21 +1274,20 @@ class BinaryPerformanceEvaluator:
         # ------------------------------------------------------------------ #
         # 4 ─ Annotation helper                                             #
         # ------------------------------------------------------------------ #
-        def _annotate(ax_or_fig, row_idx, col_idx, metric_str):
-            if not show_table or not metric_str:
+        def _annotate_metric(ax_or_fig, row_idx, col_idx, metric_str):
+            if not show_metric or not metric_str:
                 return
             if backend == "plotly":
-                fig.add_annotation(text=metric_str.replace(" ", "<br>"),
+                fig.add_annotation(text=metric_str,
                                    xref=f"x{row_idx*ncols+col_idx}" if n>1 else "x",
                                    yref=f"y{row_idx*ncols+col_idx}" if n>1 else "y",
-                                   x=0.5, y=-0.25, showarrow=False,
-                                   align="center", font=dict(size=10))
+                                   x=0.98, y=0.98,
+                                   showarrow=False, align="right",
+                                   font=dict(size=10, color="black"))
             else:
-                words = metric_str.replace("=", " ").split()
-                rows = [words[i:i+2] for i in range(0, len(words), 2)]
-                tbl = ax_or_fig.table(cellText=rows, loc="bottom",
-                                      bbox=[0.0, -0.3, 1, 0.2], cellLoc="center")
-                tbl.scale(1, 1.1)
+                ax_or_fig.text(0.98, 0.98, metric_str,
+                               transform=ax_or_fig.transAxes,
+                               ha="right", va="top", fontsize=10)
 
         # ------------------------------------------------------------------ #
         # 5 ─ Main loop                                                     #
@@ -1309,7 +1339,7 @@ class BinaryPerformanceEvaluator:
             if bars:
                 if backend == "plotly":
                     fig.add_bar(x=centres, y=hist_ref,
-                                name="Reference" if idx==0 else "",
+                                name="Reference" if idx==0 else "Reference",
                                 marker=dict(color=cmap_reference),
                                 row=row, col=col, **bar_kwargs)
                 else:
@@ -1327,7 +1357,7 @@ class BinaryPerformanceEvaluator:
             if bars:
                 if backend == "plotly":
                     fig.add_bar(x=centres, y=hist_cmp,
-                                name="Compare" if idx==0 else "",
+                                name="Compare" if idx==0 else "Compare",
                                 marker=dict(color=cmap_compare,
                                             line=dict(color=edge_colours if edge_colours else cmap_compare,
                                                       width=1.8 if edge_colours else 0)),
@@ -1339,18 +1369,18 @@ class BinaryPerformanceEvaluator:
                            linewidth=1.5 if edge_colours else 0, **bar_kwargs)
 
             # ----------------------- KDE -----------------------
-            def _kde(series, color):
+            def _kde(series, color, label):
                 if not kde: return
                 kp = dict(ax=ax if backend=="matplotlib" else None,
-                          color=color, linewidth=1.4)
+                          color=color, linewidth=1.4, label=label)
                 if kde_fill_alpha is not None and kde_fill_alpha > 0:
                     kp.update(fill=True, alpha=kde_fill_alpha)
                 if backend == "matplotlib":
                     sns.kdeplot(series, **kp)
 
             if backend == "matplotlib":
-                _kde(ref_series, cmap_reference)
-                _kde(cmp_series, cmap_compare)
+                _kde(ref_series, cmap_reference, "Reference")
+                _kde(cmp_series, cmap_compare, "Compare")
 
             # ----------------------- Metrics -------------------
             metric_str = ""
@@ -1358,7 +1388,7 @@ class BinaryPerformanceEvaluator:
                 metric_str = f"PSI={_compute_psi(counts_ref, counts_cmp):.3f}"
             elif drift_metric == "ks":
                 ks_stat, p_val = stats.ks_2samp(ref_series, cmp_series)
-                metric_str = f"KS={ks_stat:.3f} p={p_val:.3f}"
+                metric_str = f"KS={ks_stat:.3f} (p={p_val:.3f})"
 
             # ----------------------- Labels --------------------
             if backend == "plotly":
@@ -1369,10 +1399,13 @@ class BinaryPerformanceEvaluator:
                 ax.set_title(feat)
                 ax.set_ylabel(stat.capitalize())
                 if log_scale: ax.set_xscale("log")
-                if bars: ax.legend(title=metric_str)
 
-            # annotation / optional table
-            _annotate(ax if backend=="matplotlib" else fig, row, col, metric_str)
+            # annotation – replaces old table
+            _annotate_metric(ax if backend=="matplotlib" else fig, row, col, metric_str)
+
+            # legend
+            if backend == "matplotlib" and show_legend:
+                ax.legend(loc="best")
 
         # ------------------------------------------------------------------ #
         # 6 ─ Output                                                        #
@@ -1381,7 +1414,8 @@ class BinaryPerformanceEvaluator:
             fig.update_layout(template="plotly_white",
                               height=figsize[1]*nrows*110,
                               width=figsize[0]*ncols*110,
-                              barmode="overlay")
+                              barmode="overlay",
+                              showlegend=show_legend)
             if save: Path(save).with_suffix(".html").write_text(fig.to_html())
             if show: fig.show()
         else:
@@ -1392,6 +1426,7 @@ class BinaryPerformanceEvaluator:
             if show: plt.show()
             else: plt.close(fig)
         return None
+
     
     def plot_ks(
         self,
