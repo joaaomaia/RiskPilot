@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-viz = ["seaborn>=0.13"]
+viz = ["seaborn>=0.13", "kaleido==0.2.1"]
 binning = ["optbinning>=0.16"]
 dev = [
   "pytest>=8",
@@ -36,6 +36,11 @@ dev = [
   "black>=24",
   "isort>=5",
   "ruff>=0.4",
+]
+model = [
+    "xgboost>=1.7.6",
+    "lightgbm>=4.6.0",
+    "ortools==9.12.*"   # <= compatível com cvxpy 1.6.x
 ]
 
 [tool.hatch.build.targets.wheel]

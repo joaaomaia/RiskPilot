@@ -1,0 +1,45 @@
+✅ executar para criar novo ambiente zerado e requirements.lock em git bash / windows
+bash env_setup/setup_riskpilot_env_gitbash_windows
+
+✅ instalando em modo de edição
+pip install -e .[dev,viz,binning,model]
+
+✅ Teste de funcionamento mínimo
+
+import riskpilot
+print("RiskPilot carregado com sucesso!")
+
+# Se quiser validar que tudo roda sem erros:
+pytest -q
+
+🔐 Dica: Fixar dependências nas demais máquinas
+No futuro, ao clonar o repositório em outras máquinas, você poderá usar:
+
+pip install --require-hashes -r requirements.lock
+pip install -e .[dev,viz,binning,model]
+
+
+
+
+
+###--------------------------------------------------------
+# (1) Se houver um venv/conda ativo, saia dele
+deactivate 2>/dev/null || conda deactivate 2>/dev/null || true
+
+# (2) Desinstale versões antigas do RiskPilot — repita até pip não encontrar mais nada
+pip uninstall -y riskpilot || true
+
+# (3) Elimine diretórios residuais do pacote
+python - <<'PY'
+import site, shutil, pathlib, sys, importlib.util
+for path in site.getsitepackages() + [site.getusersitepackages()]:
+    for p in pathlib.Path(path).glob("riskpilot*"):
+        print("removendo", p)
+        shutil.rmtree(p, ignore_errors=True)
+# idem para caches de byte-code
+for p in pathlib.Path.home().rglob("__pycache__/riskpilot*"):
+    shutil.rmtree(p, ignore_errors=True)
+PY
+
+# (4) Limpe o cache do pip
+pip cache purge
