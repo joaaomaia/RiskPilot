@@ -736,171 +736,176 @@ class BinaryPerformanceEvaluator:
 
         return fig
 
+
     def plot_event_rate(
         self,
         *,
+        splits: list[str] | None = None,
+        separated: bool = False,
         save: bool = False,
         title: str = "",
         custom_colors: list[str] | None = None,
     ) -> tuple[go.Figure, go.Figure]:
         """
-        1) Bad‑Rate por GH (hover unified)
-        2) Participação de GHs (stacked bar)
+        1) Bad-Rate por GH
+        2) Participação de GHs
 
         Parameters
         ----------
-        save : bool, default False
-            Salva PNG em ``self.save_dir`` quando definido.
-        title : str, optional
-            Título base para o gráfico de Bad‑Rate.
-        custom_colors : list[str] | None, optional
-            Lista de *hex codes* (ex.: ``["#1f77b4", "#ff7f0e", ...]``)
-            aplicados **na ordem** dos GHs classificados por Bad‑Rate — isto é,
-            ``custom_colors[0]`` colore o GH1 (maior Bad‑Rate),
-            ``custom_colors[1]`` o GH2 e assim por diante. Caso a lista contenha
-            menos cores que grupos, os GHs restantes recebem as cores da paleta
-            automática gerada por :meth:`_compute_group_palette`.
-        """
-        import numpy as np
-        import pandas as pd
-        import plotly.graph_objects as go
+        splits : list[str] | None
+            Subconjunto de ["train","test","val"]. None → todos disponíveis.
+        separated : bool, default False
+            • False → gráficos combinados (igual versão anterior).  
+            • True  → um subplot por split.
+        save : bool
+            Se True, salva PNG em `self.save_dir`.
+        title : str
+            Título base para o gráfico de Bad-Rate.
+        custom_colors : list[str] | None
+            Cores hex que sobrescrevem a paleta automática na ordem GH1→GHn.
 
-        # ---------- validações ----------
+        Returns
+        -------
+        (fig_rate, fig_share)
+            Ambos são `plotly.graph_objects.Figure`.
+        """
+        import numpy as np, pandas as pd, plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+
+        # ----------- validações e splits -----------------
         if self.date_col is None:
-            raise ValueError("`date_col` is required for plot_event_rate().")
+            raise ValueError("`date_col` é obrigatório para plot_event_rate().")
+
+        available = {"train": self.df_train, "test": self.df_test}
+        if getattr(self, "df_val", None) is not None:
+            available["val"] = self.df_val
+
+        if splits is None:
+            splits = list(available.keys())
+        else:
+            splits = [s.lower() for s in splits]
+        invalid = [s for s in splits if s not in available]
+        if invalid:
+            raise ValueError(f"Splits inválidos: {invalid}")
+
+        # ----------- paleta + ordem de GH ----------------
+        df_full = pd.concat(
+            [available[s].assign(Split=s.capitalize()) for s in splits], axis=0
+        )
+        df_full[self.date_col] = pd.to_datetime(df_full[self.date_col])
 
         group_col = next(
-            (
-                c
-                for c in [self.group_col, self.group_col_]
-                if c and c in self.data_.columns
-            ),
-            None,
+            c for c in [self.group_col, self.group_col_] if c and c in df_full.columns
         )
-        if group_col is None:
-            raise ValueError("Group column not found for plot_event_rate().")
-
-        # ---------- dataset ----------
-        df_all = pd.concat(
-            [
-                self.df_train.assign(Split="Train"),
-                self.df_test.assign(Split="Test"),
-                *([self.df_val.assign(Split="Val")] if self.df_val is not None else []),
-            ],
-            axis=0,
-        )
-        df_all[self.date_col] = pd.to_datetime(df_all[self.date_col])
-
-        # ---------- GH ordem por Bad‑Rate ----------
         br_order = (
-            df_all.groupby(group_col)[self.target_col]
-            .mean()
-            .sort_values(ascending=False)
+            df_full.groupby(group_col)[self.target_col].mean().sort_values(ascending=False)
         )
-        gh_label = {g: f"GH{idx+1}" for idx, g in enumerate(br_order.index)}
-        groups_sorted = list(br_order.index)
+        gh_order = list(br_order.index)      # pior → melhor
+        gh_label = {g: f"GH{i+1}" for i, g in enumerate(gh_order)}
 
-        # ---------- tabelas ----------
-        pivot_br = (
-            df_all.groupby([self.date_col, group_col])[self.target_col]
-            .mean()
-            .unstack(group_col)
-            .reindex(columns=groups_sorted)
-            .sort_index()
-        )
-        counts = (
-            df_all.groupby([self.date_col, group_col])
-            .size()
-            .unstack(group_col)
-            .reindex(columns=groups_sorted, fill_value=0)
-            .sort_index()
-        )
-        pct = counts.div(counts.sum(axis=1), axis=0)
+        self._compute_group_palette()        # paleta automática
+        colors = {**self.group_palette_, **{
+            g: col for g, col in zip(gh_order, custom_colors or [])
+        }}
 
-        # ---------- cores ----------
-        self._compute_group_palette()
-        base_colors = self.group_palette_ or {}
-
-        # mapeia custom_colors → grupos (ordem por Bad‑Rate desc.)
-        override = {}
-        if custom_colors:
-            for grp, col_hex in zip(groups_sorted, custom_colors):
-                if isinstance(col_hex, str) and col_hex:
-                    override[grp] = col_hex
-
-        # combina paletas: custom sobrepõe automático
-        colors = {**base_colors, **override}
-
-        # ---------- figura Bad‑Rate ----------
-        fig_rate = go.Figure()
-        for g in groups_sorted:
-            periods_fmt = pivot_br.index.strftime("%Y%m")
-            vols_fmt = counts[g].apply(lambda v: f"{v:,}".replace(",", "."))
-            custom = np.stack([periods_fmt, vols_fmt], axis=-1)
-
-            fig_rate.add_trace(
-                go.Scatter(
-                    x=pivot_br.index,
-                    y=pivot_br[g],
-                    mode="lines+markers",
-                    name=gh_label[g],
-                    line=dict(color=colors.get(g)),
-                    marker=dict(color=colors.get(g)),
-                    customdata=custom,  # [[safra, volume_fmt]]
-                    hovertemplate=(
-                        "Bad Rate: %{y:.2%}<br>"
-                        "Volume: %{customdata[1]}<br>"
-                        f"Intervalo: {g}<extra></extra><br>"
-                    ),
-                )
+        # ------------- helper p/ um split ----------------
+        def _tables(df):
+            pivot_br = (
+                df.groupby([self.date_col, group_col])[self.target_col]
+                .mean()
+                .unstack(group_col)
+                .reindex(columns=gh_order)
+                .sort_index()
             )
+            counts = (
+                df.groupby([self.date_col, group_col]).size()
+                .unstack(group_col)
+                .reindex(columns=gh_order, fill_value=0)
+                .sort_index()
+            )
+            pct = counts.div(counts.sum(axis=1), axis=0)
+            return pivot_br, counts, pct
 
+        # =================================================
+        #            FIGURA 1 – Bad-Rate
+        # =================================================
+        n_cols = len(splits) if separated else 1
+        fig_rate = make_subplots(
+            rows=1, cols=n_cols,
+            subplot_titles=[s.capitalize() for s in splits] if separated else None
+        )
+
+        # =================================================
+        #            FIGURA 2 – Participação
+        # =================================================
+        fig_share = make_subplots(
+            rows=1, cols=n_cols,
+            subplot_titles=[s.capitalize() for s in splits] if separated else None,
+            specs=[[{"type": "bar"}]*n_cols],
+        )
+
+        # ----------------- loop splits -------------------
+        for c, split in enumerate(splits, 1):
+            df_s = available[split]
+            df_s[self.date_col] = pd.to_datetime(df_s[self.date_col])
+            pivot_br, counts, pct = _tables(df_s)
+
+            # ----- Bad-Rate traces -----
+            for g in gh_order:
+                fig_rate.add_trace(
+                    go.Scatter(
+                        x=pivot_br.index,
+                        y=pivot_br[g],
+                        mode="lines+markers",
+                        name=gh_label[g] if separated else f"{gh_label[g]} – {split}",
+                        marker=dict(color=colors[g]),
+                        line=dict(color=colors[g]),
+                        showlegend=not separated,   # legenda global no modo combinado
+                    ),
+                    row=1, col=c if separated else 1,
+                )
+
+            # ----- Participação traces -----
+            for g in gh_order:
+                fig_share.add_trace(
+                    go.Bar(
+                        x=pct.index,
+                        y=pct[g],
+                        name=gh_label[g] if separated else f"{gh_label[g]} – {split}",
+                        marker=dict(color=colors[g]),
+                        showlegend=False,           # legenda = fig_rate
+                    ),
+                    row=1, col=c if separated else 1,
+                )
+
+        # --------------- layout global -------------------
+        common_layout = dict(
+            template="plotly_white",
+            legend_title="Grupos Homogêneos",
+        )
         fig_rate.update_layout(
             title=title or "Bad Rate por GH",
-            yaxis_title="Bad Rate",
-            xaxis_title="Safra",
-            template="plotly_white",
             hovermode="x unified",
-            xaxis_showgrid=False,
-            yaxis_showgrid=False,
             yaxis_tickformat=".0%",
-            legend_title="Grupos Homogêneos",
+            **common_layout,
         )
-
-        # ---------- figura Participação ----------
-        fig_share = go.Figure()
-        for g in groups_sorted:
-            fig_share.add_trace(
-                go.Bar(
-                    x=pct.index,
-                    y=pct[g],
-                    name=gh_label[g],
-                    marker=dict(color=colors.get(g)),
-                    customdata=counts[g],
-                    hovertemplate=(
-                        "Safra: %{x|%Y%m}<br>"
-                        "Participação: %{y:.1%}<br>"
-                        "Volume: %{customdata:,}<br>"
-                        f"Intervalo: {g}<extra></extra>"
-                    ),
-                )
-            )
         fig_share.update_layout(
-            barmode="stack",
-            title="Participação dos GHs",
-            yaxis_title="Participação",
+            title="Participação por GH" if title == "" else title + " – Participação",
             yaxis_tickformat=".0%",
-            xaxis_title="Safra",
-            template="plotly_white",
-            xaxis_showgrid=False,
-            yaxis_showgrid=False,
-            legend_title="Grupos Homogêneos",
+            barmode="stack",
+            **common_layout,
         )
 
-        # ---------- salvar opcional ----------
+        # ---- remove grade de TODOS os eixos --------------
+        fig_rate.update_xaxes(showgrid=False)
+        fig_rate.update_yaxes(showgrid=False, tickformat=".0%")
+        fig_share.update_xaxes(showgrid=False)
+        fig_share.update_yaxes(showgrid=False,tickformat=".0%")
+
+        # --------------- salvar opcional -----------------
         if save and self.save_dir:
-            fig_rate.write_image(self.save_dir / "event_rate.png")
-            fig_share.write_image(self.save_dir / "group_share.png")
+            fig_rate.write_image(self.save_dir / "event_rate.png", scale=2)
+            fig_share.write_image(self.save_dir / "event_share.png", scale=2)
 
         return fig_rate, fig_share
 
