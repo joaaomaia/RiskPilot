@@ -26,7 +26,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-viz = ["shap>=0.45", "plotly>=5.20"]
+viz = [
+  "shap>=0.45 ; python_version < '3.13'", 
+  "plotly>=5.20"
+  ]
 binning = ["optbinning>=0.16"]
 dev = [
   "pytest>=8",
