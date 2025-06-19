@@ -57,6 +57,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import seaborn as sns
+import plotly.express as px
 
 try:
     from optbinning import OptimalBinning
@@ -3067,3 +3068,146 @@ class BinaryPerformanceEvaluator:
         df["variation"] = variation
         df["variation_flag"] = variation >= variation_threshold
         return df
+
+    def _build_shap_bar_plot(
+        self,
+        summary_df: pd.DataFrame,
+        *,
+        plot_type: Literal["bar", "layered"] = "bar",
+        color_palette: list[str] | None = None,
+        annotate_variation: bool = True,
+        title: str | None = None,
+        directionality: bool = False,
+    ) -> go.Figure:
+        """Return a Plotly bar chart visualising SHAP summary values.
+
+        Parameters
+        ----------
+        summary_df:
+            Output from :meth:`_flag_variations` with columns ``feature``,
+            ``split`` and ``importance``. ``direction`` and ``variation`` are
+            optional.
+        plot_type:
+            ``"bar"`` for side-by-side bars or ``"layered"`` for stacked bars.
+        color_palette:
+            List of colours to use per split. ``None`` falls back to
+            ``px.colors.qualitative.Plotly``.
+        annotate_variation:
+            When ``True`` adds annotations for rows where ``variation_flag`` is
+            ``True``.
+        title:
+            Custom plot title. If ``None`` a default is used.
+        directionality:
+            If ``True`` colours are lightened when the mean SHAP value direction
+            is negative.
+
+        Returns
+        -------
+        go.Figure
+            Fully styled Plotly Figure ready to display or save.
+
+        Examples
+        --------
+        >>> summary = evaluator._prepare_shap_summary(shap_dict)
+        >>> summary = evaluator._flag_variations(summary, reference_split="train")
+        >>> fig = evaluator._build_shap_bar_plot(
+        ...     summary,
+        ...     plot_type="layered",
+        ...     color_palette=["#1f77b4", "#ff7f0e"],
+        ...     directionality=True,
+        ...     annotate_variation=True,
+        ...     title="SHAP – Train vs Test",
+        ... )
+        >>> fig.show()
+        """
+
+        if summary_df.empty:
+            raise ValueError("summary_df must not be empty")
+
+        if plot_type not in {"bar", "layered"}:
+            raise ValueError("plot_type must be 'bar' or 'layered'")
+
+        # Pivot to get consistent ordering and handle missing splits
+        imp_wide = summary_df.pivot(
+            index="feature", columns="split", values="importance"
+        ).fillna(0)
+        dir_wide = summary_df.pivot(
+            index="feature", columns="split", values="direction"
+        ).fillna(0)
+
+        feature_order = (
+            imp_wide.mean(axis=1).sort_values(ascending=False).index.tolist()
+        )
+        imp_wide = imp_wide.loc[feature_order]
+        dir_wide = dir_wide.loc[feature_order]
+
+        splits = list(imp_wide.columns)
+
+        palette = color_palette or px.colors.qualitative.Plotly
+        colors = {s: palette[i % len(palette)] for i, s in enumerate(splits)}
+
+        fig = go.Figure()
+        barmode = "group" if plot_type == "bar" else "stack"
+
+        def _lighten(color: str, factor: float = 0.6) -> str:
+            import matplotlib.colors as mcolors
+
+            r, g, b = mcolors.to_rgb(color)
+            r = 1 - (1 - r) * factor
+            g = 1 - (1 - g) * factor
+            b = 1 - (1 - b) * factor
+            return mcolors.to_hex((r, g, b))
+
+        for split in splits:
+            values = imp_wide[split].tolist()
+            dirs = dir_wide[split].tolist()
+            if directionality:
+                bar_colors = [
+                    _lighten(colors[split]) if d < 0 else colors[split] for d in dirs
+                ]
+            else:
+                bar_colors = colors[split]
+
+            fig.add_bar(
+                y=feature_order,
+                x=values,
+                orientation="h",
+                name=split,
+                offsetgroup=split,
+                marker_color=bar_colors,
+            )
+
+        if annotate_variation and "variation_flag" in summary_df.columns:
+            flagged = summary_df[summary_df["variation_flag"]].copy()
+            flagged = flagged.set_index(["feature", "split"])
+            y_shift: dict[str, int] = {}
+            for feature in feature_order:
+                cum = 0.0
+                for split in splits:
+                    val = imp_wide.loc[feature, split]
+                    if (feature, split) in flagged.index:
+                        var_val = float(flagged.loc[(feature, split), "variation"])
+                        text = f"Δ {var_val:+.0%}"
+                        x_pos = val / 2 if barmode == "group" else cum + val / 2
+                        shift = y_shift.get(feature, 0)
+                        fig.add_annotation(
+                            x=x_pos,
+                            y=feature,
+                            text=text,
+                            showarrow=False,
+                            yshift=shift,
+                        )
+                        y_shift[feature] = shift + 12
+                    cum += val
+
+        fig.update_layout(
+            template="simple_white",
+            title=title or "SHAP Feature Importance",
+            barmode=barmode,
+            height=min(50 + 30 * len(feature_order), 900),
+            margin=dict(l=150, r=40, t=80, b=60),
+        )
+        fig.update_xaxes(showgrid=False)
+        fig.update_yaxes(autorange="reversed")
+
+        return fig
