@@ -49,7 +49,8 @@ import pickle
 import uuid
 import warnings
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence, Union
+from typing import Any, Dict, List, Literal, Optional, Union
+from collections.abc import Sequence
 
 import joblib
 import numpy as np
@@ -2894,3 +2895,175 @@ class BinaryPerformanceEvaluator:
             )
 
         return explanation
+
+    def _prepare_shap_summary(
+        self,
+        shap_dict: dict[str, shap.Explanation],
+        *,
+        max_display: int = 20,
+        feature_groups: dict[str, Sequence[str]] | None = None,
+    ) -> pd.DataFrame:
+        """Aggregate SHAP values across splits into a tidy table.
+
+        Args:
+            shap_dict: Mapping of split name to :class:`shap.Explanation`.
+            max_display: Number of top features per split after grouping.
+            feature_groups: Optional mapping ``{group: [features...]}`` used to
+                collapse raw features.
+
+        Returns:
+            pandas.DataFrame: Long-format DataFrame with columns ``feature``,
+            ``split``, ``importance`` and ``direction``.
+        """
+
+        logger = logging.getLogger("riskpilot")
+
+        if not shap_dict:
+            return pd.DataFrame(columns=["feature", "split", "importance", "direction"])
+
+        ref = next(iter(shap_dict.values()))
+        ref_features = list(ref.feature_names)
+        n_features = len(ref_features)
+
+        # validate shapes and feature names
+        for split, expl in shap_dict.items():
+            names = list(expl.feature_names)
+            if names != ref_features:
+                raise ValueError("All splits must share the same feature order")
+            values = np.asarray(expl.values)
+            if values.ndim == 3 and values.shape[1] == 1:
+                values = values[:, 0, :]
+            if values.ndim != 2 or values.shape[1] != n_features:
+                raise ValueError("SHAP values must be 2-D with consistent features")
+
+        feature_groups = feature_groups or {}
+
+        group_members = {f for members in feature_groups.values() for f in members}
+        for f in group_members:
+            if f not in ref_features:
+                raise ValueError(f"Feature '{f}' specified in groups not found")
+
+        split_frames = {}
+        top_features: list[set[str]] = []
+
+        for split, expl in shap_dict.items():
+            values = np.asarray(expl.values)
+            if values.ndim == 3 and values.shape[1] == 1:
+                values = values[:, 0, :]
+
+            imp = np.abs(values).mean(axis=0)
+            dir_ = np.sign(values).mean(axis=0)
+            df = pd.DataFrame(
+                {
+                    "feature": ref_features,
+                    "importance": imp,
+                    "direction": dir_,
+                }
+            )
+
+            if feature_groups:
+                grouped_imp = {}
+                grouped_dir = {}
+                for gname, feats in feature_groups.items():
+                    g_imp = df.loc[df["feature"].isin(feats), "importance"].sum()
+                    weights = df.loc[df["feature"].isin(feats), "importance"]
+                    g_dir = 0.0
+                    if weights.sum() > 0:
+                        g_dir = float(
+                            np.average(
+                                df.loc[df["feature"].isin(feats), "direction"],
+                                weights=weights,
+                            )
+                        )
+                    grouped_imp[gname] = g_imp
+                    grouped_dir[gname] = g_dir
+
+                remaining = df[~df["feature"].isin(group_members)].copy()
+                grouped_df = pd.DataFrame(
+                    {
+                        "feature": list(grouped_imp.keys()),
+                        "importance": list(grouped_imp.values()),
+                        "direction": list(grouped_dir.values()),
+                    }
+                )
+                df = pd.concat([grouped_df, remaining], ignore_index=True)
+
+            df["split"] = split
+            split_frames[split] = df
+            top = (
+                df.sort_values("importance", ascending=False)
+                .head(max_display)["feature"]
+                .tolist()
+            )
+            top_features.append(set(top))
+
+        features_keep = set().union(*top_features)
+
+        result_frames = []
+        for split, df in split_frames.items():
+            df_keep = df[df["feature"].isin(features_keep)].copy()
+            df_keep = df_keep.sort_values("importance", ascending=False)
+            result_frames.append(df_keep)
+
+        summary_df = pd.concat(result_frames, ignore_index=True)
+        summary_df = summary_df[["feature", "split", "importance", "direction"]]
+        return summary_df
+
+    def _flag_variations(
+        self,
+        summary_df: pd.DataFrame,
+        *,
+        reference_split: str | None,
+        variation_threshold: float = 0.5,
+    ) -> pd.DataFrame:
+        """Flag features whose importance varies across splits.
+
+        Args:
+            summary_df: Output from :meth:`_prepare_shap_summary`.
+            reference_split: Baseline split used for comparison. When ``None``
+                the mean importance of other splits is used.
+            variation_threshold: Relative difference threshold to trigger the
+                flag.
+
+        Returns:
+            pandas.DataFrame: ``summary_df`` with an extra ``variation_flag``
+            column.
+        """
+
+        logger = logging.getLogger("riskpilot")
+        eps = np.finfo(float).eps
+
+        df = summary_df.copy()
+
+        if reference_split is not None and reference_split not in df["split"].unique():
+            logger.warning(
+                "reference_split '%s' not found. Falling back to mean logic.",
+                reference_split,
+            )
+            reference_split = None
+
+        if reference_split is not None:
+            ref_imp = df[df["split"] == reference_split].set_index("feature")[
+                "importance"
+            ]
+            df = df.merge(
+                ref_imp.rename("ref_imp"), left_on="feature", right_index=True
+            )
+            variation = (df["importance"] - df["ref_imp"]).abs() / np.maximum(
+                np.abs(df["ref_imp"]), eps
+            )
+        else:
+            count = df.groupby("feature")["importance"].transform("count")
+            sum_imp = df.groupby("feature")["importance"].transform("sum")
+            others_mean = np.where(
+                count > 1,
+                (sum_imp - df["importance"]) / (count - 1),
+                0.0,
+            )
+            variation = (df["importance"] - others_mean).abs() / np.maximum(
+                np.abs(others_mean), eps
+            )
+
+        df["variation"] = variation
+        df["variation_flag"] = variation >= variation_threshold
+        return df
