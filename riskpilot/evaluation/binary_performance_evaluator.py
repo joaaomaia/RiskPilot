@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import pickle
 import uuid
 import warnings
@@ -55,7 +56,6 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import seaborn as sns
-import math
 
 try:
     from optbinning import OptimalBinning
@@ -65,6 +65,7 @@ except ImportError:  # pragma: no cover - optional dependency
         "Optional dependency 'optbinning' is missing. "
         "Install with `pip install riskpilot[binning]`."
     )
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     average_precision_score,
     brier_score_loss,
@@ -73,6 +74,24 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+
+try:
+    import shap
+except ImportError:  # pragma: no cover - optional dependency
+    shap = None  # type: ignore[assignment]
+    logging.warning(
+        "Optional dependency 'shap' is missing. Install with `pip install shap`."
+    )
+
+try:  # pragma: no cover - optional dependency
+    from xgboost import XGBModel
+except Exception:  # pragma: no cover - optional dependency
+    XGBModel = object  # type: ignore[assignment]
+
+try:  # pragma: no cover - optional dependency
+    from lightgbm.sklearn import LGBMModel
+except Exception:  # pragma: no cover - optional dependency
+    LGBMModel = object  # type: ignore[assignment]
 
 from ..synthetic import LookAhead
 from .decile_plot import decile_analysis_plot
@@ -324,7 +343,9 @@ class BinaryPerformanceEvaluator:
         records: list[dict] = []
         for split_name, df in splits.items():
             if by_date_col and date_col in df.columns:
-                for period, df_period in df.sort_values(date_col).groupby(date_col, sort=True):
+                for period, df_period in df.sort_values(date_col).groupby(
+                    date_col, sort=True
+                ):
                     records.append(_row(df_period, split_name, period))
             else:
                 records.append(_row(df, split_name))
@@ -338,7 +359,6 @@ class BinaryPerformanceEvaluator:
             metrics_df.set_index("Split", inplace=True)
 
         return metrics_df
-    
 
     def run_stress_test(
         self,
@@ -736,7 +756,6 @@ class BinaryPerformanceEvaluator:
 
         return fig
 
-
     def plot_event_rate(
         self,
         *,
@@ -755,7 +774,7 @@ class BinaryPerformanceEvaluator:
         splits : list[str] | None
             Subconjunto de ["train","test","val"]. None → todos disponíveis.
         separated : bool, default False
-            • False → gráficos combinados (igual versão anterior).  
+            • False → gráficos combinados (igual versão anterior).
             • True  → um subplot por split.
         save : bool
             Se True, salva PNG em `self.save_dir`.
@@ -769,7 +788,8 @@ class BinaryPerformanceEvaluator:
         (fig_rate, fig_share)
             Ambos são `plotly.graph_objects.Figure`.
         """
-        import numpy as np, pandas as pd, plotly.graph_objects as go
+        import pandas as pd
+        import plotly.graph_objects as go
         from plotly.subplots import make_subplots
 
         # ----------- validações e splits -----------------
@@ -798,15 +818,18 @@ class BinaryPerformanceEvaluator:
             c for c in [self.group_col, self.group_col_] if c and c in df_full.columns
         )
         br_order = (
-            df_full.groupby(group_col)[self.target_col].mean().sort_values(ascending=False)
+            df_full.groupby(group_col)[self.target_col]
+            .mean()
+            .sort_values(ascending=False)
         )
-        gh_order = list(br_order.index)      # pior → melhor
+        gh_order = list(br_order.index)  # pior → melhor
         gh_label = {g: f"GH{i+1}" for i, g in enumerate(gh_order)}
 
-        self._compute_group_palette()        # paleta automática
-        colors = {**self.group_palette_, **{
-            g: col for g, col in zip(gh_order, custom_colors or [])
-        }}
+        self._compute_group_palette()  # paleta automática
+        colors = {
+            **self.group_palette_,
+            **{g: col for g, col in zip(gh_order, custom_colors or [])},
+        }
 
         # ------------- helper p/ um split ----------------
         def _tables(df):
@@ -818,7 +841,8 @@ class BinaryPerformanceEvaluator:
                 .sort_index()
             )
             counts = (
-                df.groupby([self.date_col, group_col]).size()
+                df.groupby([self.date_col, group_col])
+                .size()
                 .unstack(group_col)
                 .reindex(columns=gh_order, fill_value=0)
                 .sort_index()
@@ -831,17 +855,19 @@ class BinaryPerformanceEvaluator:
         # =================================================
         n_cols = len(splits) if separated else 1
         fig_rate = make_subplots(
-            rows=1, cols=n_cols,
-            subplot_titles=[s.capitalize() for s in splits] if separated else None
+            rows=1,
+            cols=n_cols,
+            subplot_titles=[s.capitalize() for s in splits] if separated else None,
         )
 
         # =================================================
         #            FIGURA 2 – Participação
         # =================================================
         fig_share = make_subplots(
-            rows=1, cols=n_cols,
+            rows=1,
+            cols=n_cols,
             subplot_titles=[s.capitalize() for s in splits] if separated else None,
-            specs=[[{"type": "bar"}]*n_cols],
+            specs=[[{"type": "bar"}] * n_cols],
         )
 
         # ----------------- loop splits -------------------
@@ -860,9 +886,10 @@ class BinaryPerformanceEvaluator:
                         name=gh_label[g] if separated else f"{gh_label[g]} – {split}",
                         marker=dict(color=colors[g]),
                         line=dict(color=colors[g]),
-                        showlegend=not separated,   # legenda global no modo combinado
+                        showlegend=not separated,  # legenda global no modo combinado
                     ),
-                    row=1, col=c if separated else 1,
+                    row=1,
+                    col=c if separated else 1,
                 )
 
             # ----- Participação traces -----
@@ -873,9 +900,10 @@ class BinaryPerformanceEvaluator:
                         y=pct[g],
                         name=gh_label[g] if separated else f"{gh_label[g]} – {split}",
                         marker=dict(color=colors[g]),
-                        showlegend=False,           # legenda = fig_rate
+                        showlegend=False,  # legenda = fig_rate
                     ),
-                    row=1, col=c if separated else 1,
+                    row=1,
+                    col=c if separated else 1,
                 )
 
         # --------------- layout global -------------------
@@ -900,7 +928,7 @@ class BinaryPerformanceEvaluator:
         fig_rate.update_xaxes(showgrid=False)
         fig_rate.update_yaxes(showgrid=False, tickformat=".0%")
         fig_share.update_xaxes(showgrid=False)
-        fig_share.update_yaxes(showgrid=False,tickformat=".0%")
+        fig_share.update_yaxes(showgrid=False, tickformat=".0%")
 
         # --------------- salvar opcional -----------------
         if save and self.save_dir:
@@ -908,7 +936,6 @@ class BinaryPerformanceEvaluator:
             fig_share.write_image(self.save_dir / "event_share.png", scale=2)
 
         return fig_rate, fig_share
-
 
     def plot_psi(
         self,
@@ -1152,7 +1179,6 @@ class BinaryPerformanceEvaluator:
 
         return global_fig, psi_df
 
-
     def plot_histograms(  # noqa: C901
         self,
         feature: str | Sequence[str],
@@ -1171,16 +1197,16 @@ class BinaryPerformanceEvaluator:
         kde: bool = True,
         bars: bool = True,
         kde_fill_alpha: float | None = None,  # 0‒1 → área sombreada
-        alpha: float = 0.40,                  # opacidade das barras
+        alpha: float = 0.40,  # opacidade das barras
         log_scale: bool = False,
         # Styling
         figsize: tuple[int, int] = (6, 4),
-        cmap_reference: str = "#b4b5b6",      # cinza
-        cmap_compare: str = "#f88825",        # laranja
-        show_metric: bool = True,              # ⬅️  nova anotação discreta
-        show_legend: bool = True,              # ⬅️  liga/desliga legenda
+        cmap_reference: str = "#b4b5b6",  # cinza
+        cmap_compare: str = "#f88825",  # laranja
+        show_metric: bool = True,  # ⬅️  nova anotação discreta
+        show_legend: bool = True,  # ⬅️  liga/desliga legenda
         # Retro‑compatibilidade
-        show_table: bool | None = None,        # obsoleto – mantém assinatura
+        show_table: bool | None = None,  # obsoleto – mantém assinatura
         # Output behaviour
         save: str | Path | None = None,
         show: bool = True,
@@ -1205,14 +1231,17 @@ class BinaryPerformanceEvaluator:
         if backend == "matplotlib":
             import matplotlib.pyplot as plt
             import seaborn as sns
+
             sns.set_theme(style="white", rc={"axes.grid": False})
         else:
-            import plotly.graph_objects as go
             from plotly.subplots import make_subplots
 
-        import numpy as np, pandas as pd, math, warnings
-        from scipy import stats
+        import warnings
         from pathlib import Path
+
+        import numpy as np
+        import pandas as pd
+        from scipy import stats
 
         # ------------------------------------------------------------------ #
         # 1 ─ Validation                                                    #
@@ -1222,7 +1251,8 @@ class BinaryPerformanceEvaluator:
         if missing:
             raise ValueError(f"Feature(s) not found: {missing}")
         if self.date_col is None and (
-            (reference and any(reference.values())) or (compare and any(compare.values()))
+            (reference and any(reference.values()))
+            or (compare and any(compare.values()))
         ):
             raise ValueError("`date_col` is required for vintage filtering.")
 
@@ -1238,7 +1268,10 @@ class BinaryPerformanceEvaluator:
                 return {default_split: None}
             if isinstance(mapping, (list, tuple)):
                 return {default_split: list(mapping)}
-            return {k.lower(): (list(v) if v is not None else None) for k, v in mapping.items()}
+            return {
+                k.lower(): (list(v) if v is not None else None)
+                for k, v in mapping.items()
+            }
 
         reference = _prep(reference, "train")
         default_cmp = "test" if "test" in all_splits else "val"
@@ -1253,7 +1286,11 @@ class BinaryPerformanceEvaluator:
                 if vint:
                     df = _filter_by_vintages(df, self.date_col, vint)
                 frames.append(df)
-            return pd.concat(frames, axis=0, ignore_index=True) if frames else pd.DataFrame()
+            return (
+                pd.concat(frames, axis=0, ignore_index=True)
+                if frames
+                else pd.DataFrame()
+            )
 
         df_ref, df_cmp = _collect(reference), _collect(compare)
         if df_ref.empty or df_cmp.empty:
@@ -1268,13 +1305,20 @@ class BinaryPerformanceEvaluator:
         nrows = math.ceil(n / ncols)
 
         if backend == "plotly":
-            fig = make_subplots(rows=nrows, cols=ncols,
-                                subplot_titles=features,
-                                vertical_spacing=0.14, horizontal_spacing=0.08)
+            fig = make_subplots(
+                rows=nrows,
+                cols=ncols,
+                subplot_titles=features,
+                vertical_spacing=0.14,
+                horizontal_spacing=0.08,
+            )
         else:
-            fig, axes = plt.subplots(nrows, ncols,
-                                     figsize=(figsize[0]*ncols, figsize[1]*nrows),
-                                     squeeze=False)
+            fig, axes = plt.subplots(
+                nrows,
+                ncols,
+                figsize=(figsize[0] * ncols, figsize[1] * nrows),
+                squeeze=False,
+            )
 
         # ------------------------------------------------------------------ #
         # 4 ─ Annotation helper                                             #
@@ -1283,36 +1327,47 @@ class BinaryPerformanceEvaluator:
             if not show_metric or not metric_str:
                 return
             if backend == "plotly":
-                fig.add_annotation(text=metric_str,
-                                   xref=f"x{row_idx*ncols+col_idx}" if n>1 else "x",
-                                   yref=f"y{row_idx*ncols+col_idx}" if n>1 else "y",
-                                   x=0.98, y=0.98,
-                                   showarrow=False, align="right",
-                                   font=dict(size=10, color="black"))
+                fig.add_annotation(
+                    text=metric_str,
+                    xref=f"x{row_idx*ncols+col_idx}" if n > 1 else "x",
+                    yref=f"y{row_idx*ncols+col_idx}" if n > 1 else "y",
+                    x=0.98,
+                    y=0.98,
+                    showarrow=False,
+                    align="right",
+                    font=dict(size=10, color="black"),
+                )
             else:
-                ax_or_fig.text(0.98, 0.98, metric_str,
-                               transform=ax_or_fig.transAxes,
-                               ha="right", va="top", fontsize=10)
+                ax_or_fig.text(
+                    0.98,
+                    0.98,
+                    metric_str,
+                    transform=ax_or_fig.transAxes,
+                    ha="right",
+                    va="top",
+                    fontsize=10,
+                )
 
         # ------------------------------------------------------------------ #
         # 5 ─ Main loop                                                     #
         # ------------------------------------------------------------------ #
         for idx, feat in enumerate(features):
             row, col = (idx // ncols) + 1, (idx % ncols) + 1
-            ax = None if backend == "plotly" else axes[row-1, col-1]
+            ax = None if backend == "plotly" else axes[row - 1, col - 1]
 
             ref_series = pd.to_numeric(df_ref[feat], errors="coerce").dropna()
             cmp_series = pd.to_numeric(df_cmp[feat], errors="coerce").dropna()
             if ref_series.empty or cmp_series.empty:
                 warnings.warn(f"No data to plot for feature '{feat}'.")
-                if backend == "matplotlib": ax.set_visible(False)
+                if backend == "matplotlib":
+                    ax.set_visible(False)
                 continue
 
             # Bin edges
             data_ref = ref_series.values
             if bins == "auto":
                 edges = np.histogram_bin_edges(data_ref, bins="fd")
-                if len(edges)-1 > 50:
+                if len(edges) - 1 > 50:
                     edges = np.linspace(data_ref.min(), data_ref.max(), 51)
             else:
                 edges = np.histogram_bin_edges(data_ref, bins=bins)
@@ -1328,14 +1383,18 @@ class BinaryPerformanceEvaluator:
                     hist_cmp = counts_cmp * scale
             else:
                 widths = np.diff(edges)
-                p_ref = counts_ref / counts_ref.sum() if counts_ref.sum() else counts_ref
-                p_cmp = counts_cmp / counts_cmp.sum() if counts_cmp.sum() else counts_cmp
+                p_ref = (
+                    counts_ref / counts_ref.sum() if counts_ref.sum() else counts_ref
+                )
+                p_cmp = (
+                    counts_cmp / counts_cmp.sum() if counts_cmp.sum() else counts_cmp
+                )
                 if stat == "density":
-                    hist_ref, hist_cmp = p_ref/widths, p_cmp/widths
+                    hist_ref, hist_cmp = p_ref / widths, p_cmp / widths
                 else:
                     hist_ref, hist_cmp = p_ref, p_cmp
 
-            centres = edges[:-1] + np.diff(edges)/2
+            centres = edges[:-1] + np.diff(edges) / 2
             bar_kwargs = {"width": np.diff(edges)}
             key_opacity = "opacity" if backend == "plotly" else "alpha"
             bar_kwargs[key_opacity] = alpha
@@ -1343,13 +1402,24 @@ class BinaryPerformanceEvaluator:
             # ----------------------- Bars -----------------------
             if bars:
                 if backend == "plotly":
-                    fig.add_bar(x=centres, y=hist_ref,
-                                name="Reference" if idx==0 else "Reference",
-                                marker=dict(color=cmap_reference),
-                                row=row, col=col, **bar_kwargs)
+                    fig.add_bar(
+                        x=centres,
+                        y=hist_ref,
+                        name="Reference" if idx == 0 else "Reference",
+                        marker=dict(color=cmap_reference),
+                        row=row,
+                        col=col,
+                        **bar_kwargs,
+                    )
                 else:
-                    ax.bar(centres, hist_ref, label="Reference",
-                           color=cmap_reference, align="center", **bar_kwargs)
+                    ax.bar(
+                        centres,
+                        hist_ref,
+                        label="Reference",
+                        color=cmap_reference,
+                        align="center",
+                        **bar_kwargs,
+                    )
 
             # Highlight drift (only when bars & stat='count')
             edge_colours = None
@@ -1357,27 +1427,47 @@ class BinaryPerformanceEvaluator:
                 scaled_cmp = counts_cmp * scale
                 diff = np.abs(scaled_cmp - counts_ref)
                 thresh = 2 * np.sqrt(scaled_cmp + counts_ref)
-                edge_colours = ["red" if d>t else None for d,t in zip(diff, thresh)]
+                edge_colours = ["red" if d > t else None for d, t in zip(diff, thresh)]
 
             if bars:
                 if backend == "plotly":
-                    fig.add_bar(x=centres, y=hist_cmp,
-                                name="Compare" if idx==0 else "Compare",
-                                marker=dict(color=cmap_compare,
-                                            line=dict(color=edge_colours if edge_colours else cmap_compare,
-                                                      width=1.8 if edge_colours else 0)),
-                                row=row, col=col, **bar_kwargs)
+                    fig.add_bar(
+                        x=centres,
+                        y=hist_cmp,
+                        name="Compare" if idx == 0 else "Compare",
+                        marker=dict(
+                            color=cmap_compare,
+                            line=dict(
+                                color=edge_colours if edge_colours else cmap_compare,
+                                width=1.8 if edge_colours else 0,
+                            ),
+                        ),
+                        row=row,
+                        col=col,
+                        **bar_kwargs,
+                    )
                 else:
-                    ax.bar(centres, hist_cmp, label="Compare",
-                           color=cmap_compare, align="center",
-                           edgecolor=edge_colours,
-                           linewidth=1.5 if edge_colours else 0, **bar_kwargs)
+                    ax.bar(
+                        centres,
+                        hist_cmp,
+                        label="Compare",
+                        color=cmap_compare,
+                        align="center",
+                        edgecolor=edge_colours,
+                        linewidth=1.5 if edge_colours else 0,
+                        **bar_kwargs,
+                    )
 
             # ----------------------- KDE -----------------------
             def _kde(series, color, label):
-                if not kde: return
-                kp = dict(ax=ax if backend=="matplotlib" else None,
-                          color=color, linewidth=1.4, label=label)
+                if not kde:
+                    return
+                kp = dict(
+                    ax=ax if backend == "matplotlib" else None,
+                    color=color,
+                    linewidth=1.4,
+                    label=label,
+                )
                 if kde_fill_alpha is not None and kde_fill_alpha > 0:
                     kp.update(fill=True, alpha=kde_fill_alpha)
                 if backend == "matplotlib":
@@ -1397,16 +1487,20 @@ class BinaryPerformanceEvaluator:
 
             # ----------------------- Labels --------------------
             if backend == "plotly":
-                fig.update_xaxes(title=feat, type="log" if log_scale else "linear",
-                                 row=row, col=col)
+                fig.update_xaxes(
+                    title=feat, type="log" if log_scale else "linear", row=row, col=col
+                )
                 fig.update_yaxes(title=stat.capitalize(), row=row, col=col)
             else:
                 ax.set_title(feat)
                 ax.set_ylabel(stat.capitalize())
-                if log_scale: ax.set_xscale("log")
+                if log_scale:
+                    ax.set_xscale("log")
 
             # annotation – replaces old table
-            _annotate_metric(ax if backend=="matplotlib" else fig, row, col, metric_str)
+            _annotate_metric(
+                ax if backend == "matplotlib" else fig, row, col, metric_str
+            )
 
             # legend
             if backend == "matplotlib" and show_legend:
@@ -1416,23 +1510,29 @@ class BinaryPerformanceEvaluator:
         # 6 ─ Output                                                        #
         # ------------------------------------------------------------------ #
         if backend == "plotly":
-            fig.update_layout(template="plotly_white",
-                              height=figsize[1]*nrows*110,
-                              width=figsize[0]*ncols*110,
-                              barmode="overlay",
-                              showlegend=show_legend)
-            if save: Path(save).with_suffix(".html").write_text(fig.to_html())
-            if show: fig.show()
+            fig.update_layout(
+                template="plotly_white",
+                height=figsize[1] * nrows * 110,
+                width=figsize[0] * ncols * 110,
+                barmode="overlay",
+                showlegend=show_legend,
+            )
+            if save:
+                Path(save).with_suffix(".html").write_text(fig.to_html())
+            if show:
+                fig.show()
         else:
-            for j in range(n, nrows*ncols):
+            for j in range(n, nrows * ncols):
                 axes.flat[j].set_visible(False)
             fig.tight_layout()
-            if save: plt.savefig(Path(save))
-            if show: plt.show()
-            else: plt.close(fig)
+            if save:
+                plt.savefig(Path(save))
+            if show:
+                plt.show()
+            else:
+                plt.close(fig)
         return None
 
-    
     def plot_ks(
         self,
         *,
@@ -2705,3 +2805,92 @@ class BinaryPerformanceEvaluator:
             v for v in vars_ if pd.api.types.is_numeric_dtype(self.df_train[v])
         ]
         return numeric_vars
+
+    def _get_shap_explainer(self) -> "shap.explainers._explainer.Explainer":
+        """Return and cache the appropriate SHAP explainer for the model.
+
+        The explainer type is determined automatically based on ``self.model``.
+        Tree-based models use :class:`shap.TreeExplainer`, linear models use
+        :class:`shap.LinearExplainer`, and any other estimator falls back to
+        :class:`shap.KernelExplainer` with a k-means background sampled from the
+        training data. The resulting explainer is stored on ``self._shap_explainer``
+        to avoid recomputation.
+
+        Time complexity and memory usage depend on the chosen explainer. In
+        particular, ``KernelExplainer`` can be expensive for many features and
+        background samples.
+
+        Returns
+        -------
+        shap.explainers._explainer.Explainer
+            A SHAP explainer instance appropriate for ``self.model``.
+        """
+
+        if getattr(self, "_shap_explainer", None) is not None:
+            return self._shap_explainer  # type: ignore[return-value]
+
+        if shap is None:  # pragma: no cover - optional dependency guard
+            raise ImportError("shap is required for explanation functionality.")
+
+        model = self.model
+        if isinstance(model, (XGBModel, LGBMModel)):
+            explainer = shap.TreeExplainer(model)
+        elif isinstance(model, LogisticRegression):
+            explainer = shap.LinearExplainer(model)
+        else:
+            X_train = self.df_train[self.predictor_cols]
+            background = (
+                shap.sample(X_train, 100, random_state=42)
+                if len(X_train) > 100
+                else X_train
+            )
+            explainer = shap.KernelExplainer(
+                lambda m: model.predict_proba(m)[:, self._pos_class_idx],
+                background,
+            )
+
+        self._shap_explainer = explainer
+        self.feature_names_ = list(self.predictor_cols)
+        return explainer
+
+    def _compute_shap_values(self, X: pd.DataFrame) -> "shap.Explanation":
+        """Compute SHAP values for a pre-processed feature matrix.
+
+        The columns in ``X`` must match those used during model training. For
+        large datasets, consider sampling rows prior to calling this method to
+        reduce memory usage.
+
+        Parameters
+        ----------
+        X : pandas.DataFrame
+            Feature matrix with the same columns and order as ``self.predictor_cols``.
+
+        Returns
+        -------
+        shap.Explanation
+            SHAP values and expected value for the provided samples.
+        """
+
+        if shap is None:  # pragma: no cover - optional dependency guard
+            raise ImportError("shap is required for explanation functionality.")
+
+        expected_cols = list(getattr(self, "feature_names_", self.predictor_cols))
+        if list(X.columns) != expected_cols:
+            raise ValueError(
+                "Input features must match model training columns: " f"{expected_cols}"
+            )
+
+        explainer = self._get_shap_explainer()
+
+        if isinstance(explainer, shap.TreeExplainer):
+            explanation = explainer(X, check_additivity=False)
+        else:
+            explanation = explainer.shap_values(X)
+            explanation = shap.Explanation(
+                np.asarray(explanation),
+                base_values=explainer.expected_value,
+                data=X.values,
+                feature_names=expected_cols,
+            )
+
+        return explanation
