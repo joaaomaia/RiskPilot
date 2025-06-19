@@ -64,3 +64,24 @@ def test_plot_psi_last_period():
     fig, df = bev.plot_psi(reference_last_period=True, min_obs=1)
     assert isinstance(fig, go.Figure)
     assert not df.empty and "reference_type" in df.columns
+
+
+from riskpilot.evaluation import BinaryPerformanceEvaluator
+from tests.conftest import shap_available
+
+@shap_available
+def test_shap_beeswarm_runs():
+    train, _ = _split()
+    model = LogisticRegression().fit(train[["a", "b", "c"]], train["target"])
+    bev = BinaryPerformanceEvaluator(
+        model=model,
+        df_train=train,
+        df_test=train,
+        target_col="target",
+        id_cols=["id"],
+        date_col="date",
+    )
+    X = train[["a", "b", "c"]]
+    expl = bev._compute_shap_values(X)
+    fig = bev._build_shap_beeswarm(expl)
+    assert isinstance(fig, go.Figure)
