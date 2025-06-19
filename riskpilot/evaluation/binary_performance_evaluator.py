@@ -48,16 +48,16 @@ import math
 import pickle
 import uuid
 import warnings
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
-from collections.abc import Sequence
 
 import joblib
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 import seaborn as sns
-import plotly.express as px
 
 try:
     from optbinning import OptimalBinning
@@ -233,6 +233,7 @@ class BinaryPerformanceEvaluator:
             "plot_psi",
             "plot_ks",
         ),
+        font_family: str = "Arial Black",
     ) -> None:
         if stress_periods is not None:
             warnings.warn(
@@ -257,6 +258,7 @@ class BinaryPerformanceEvaluator:
         self.stress_freq = stress_freq
         self.stress_scenario = stress_scenario
         self.stress_eval_funcs = list(stress_eval_funcs)
+        self.font_family = font_family
 
         self.save_dir = Path(save_dir) if save_dir is not None else None
         if self.save_dir:
@@ -2917,8 +2919,6 @@ class BinaryPerformanceEvaluator:
             ``split``, ``importance`` and ``direction``.
         """
 
-        logger = logging.getLogger("riskpilot")
-
         if not shap_dict:
             return pd.DataFrame(columns=["feature", "split", "importance", "direction"])
 
@@ -3211,3 +3211,274 @@ class BinaryPerformanceEvaluator:
         fig.update_yaxes(autorange="reversed")
 
         return fig
+
+    def _style_plotly(
+        self, fig: go.Figure, title: str | None = None, *, height: int = 450
+    ) -> go.Figure:
+        """Apply consistent styling to Plotly figures.
+
+        Parameters
+        ----------
+        fig:
+            Target figure.
+        title:
+            Custom title overriding the figure's existing layout title.
+        height:
+            Figure height in pixels.
+
+        Returns
+        -------
+        go.Figure
+            The styled figure for chaining or display.
+        """
+
+        fig.update_layout(
+            template="simple_white",
+            title=title or fig.layout.title.text,
+            height=height,
+            margin=dict(l=80, r=40, t=80, b=60),
+            font=dict(family=self.font_family),
+        )
+        fig.update_xaxes(showgrid=False, zeroline=False)
+        fig.update_yaxes(showgrid=False, zeroline=False)
+        return fig
+
+    def _build_shap_beeswarm(
+        self,
+        expl: shap.Explanation,
+        *,
+        max_display: int = 20,
+        palette: str | list[str] = "Bluered_r",
+        title: str | None = None,
+        percentile_clip: float = 99.5,
+        jitter: float = 0.4,
+    ) -> go.Figure:
+        """Plot a Plotly beeswarm of SHAP values.
+
+        Parameters
+        ----------
+        expl:
+            SHAP Explanation computed for one split; ``expl.values`` shape must
+            ``(n_samples, n_features)``. ``expl.data`` should contain the raw
+            feature matrix so we can colour points by feature value percentile.
+        max_display:
+            Limit the number of features (rows) shown, sorted by mean absolute
+            importance. Increasing beyond 40 may render slowly.
+        palette:
+            Continuous colourscale (Plotly name) or explicit list for percentile
+            coding; default diverging blue–red.
+        title:
+            Custom figure title; if ``None`` falls back to generated
+            ``"SHAP Beeswarm – {model_name}"``.
+        percentile_clip:
+            Extreme SHAP outliers beyond this percentile (upper & lower) are
+            clipped to improve readability of dense plots.
+        jitter:
+            Random vertical jitter (in data units) applied to Y position of dots
+            to avoid over‑plotting. Values in ``0–0.5`` are sensible.
+
+        Returns
+        -------
+        go.Figure
+            Fully styled Plotly figure ready for ``fig.show()`` or static export.
+        """
+
+        values = np.asarray(expl.values)
+        if values.ndim == 3 and values.shape[1] == 1:
+            values = values[:, 0, :]
+        if values.ndim != 2:
+            raise ValueError("SHAP values must be 2-D")
+
+        data = np.asarray(expl.data)
+        feature_names = list(expl.feature_names)
+
+        imp = np.abs(values).mean(axis=0)
+        order = np.argsort(imp)[::-1][:max_display]
+        values = values[:, order]
+        data = data[:, order]
+        feature_names = [feature_names[i] for i in order]
+
+        low, high = np.percentile(
+            values.ravel(), [100 - percentile_clip, percentile_clip]
+        )
+        values = np.clip(values, low, high)
+
+        fig = go.Figure()
+        for row, (name, shap_col, raw_col) in enumerate(
+            zip(feature_names[::-1], values.T[::-1], data.T[::-1])
+        ):
+            pct = pd.Series(raw_col).rank(pct=True).values
+            y = np.full_like(shap_col, row, dtype=float) + np.random.uniform(
+                -jitter, jitter, size=len(shap_col)
+            )
+            fig.add_trace(
+                go.Scattergl(
+                    x=shap_col,
+                    y=y,
+                    mode="markers",
+                    marker=dict(
+                        color=pct,
+                        colorscale=palette,
+                        size=4,
+                        opacity=0.6,
+                        showscale=False,
+                    ),
+                    customdata=np.column_stack([raw_col]),
+                    hovertemplate=f"{name}<br>Value: %{{customdata[0]:.3f}}<br>SHAP: %{{x:.3f}}<extra></extra>",
+                    showlegend=False,
+                )
+            )
+
+        fig.update_yaxes(
+            tickvals=list(range(len(feature_names))),
+            ticktext=feature_names[::-1],
+        )
+        fig.update_xaxes(title_text="SHAP value")
+
+        title = (
+            title
+            or f"SHAP Beeswarm – {getattr(self.model, '.__class__', type(self.model)).__name__}"
+        )
+        height = 60 * len(feature_names) + 120
+        return self._style_plotly(fig, title=title, height=height)
+
+    def _build_shap_dependence(
+        self,
+        shap_dict: dict[str, shap.Explanation],
+        feature: str,
+        *,
+        palette: list[str] | None = None,
+        title: str | None = None,
+        sample: int | None = None,
+    ) -> go.Figure:
+        """Plot SHAP dependence across dataset splits.
+
+        Parameters
+        ----------
+        shap_dict:
+            Mapping of split name to :class:`shap.Explanation` objects.
+        feature:
+            Feature to visualise.
+        palette:
+            Optional colour palette used per split.
+        title:
+            Custom plot title.
+        sample:
+            Optional number of points to sample from each split for speed.
+
+        Returns
+        -------
+        go.Figure
+            Styled scatter plot with one trace per split.
+        """
+
+        if not shap_dict:
+            raise ValueError("shap_dict must not be empty")
+
+        feature_names = list(next(iter(shap_dict.values())).feature_names)
+        if feature not in feature_names:
+            raise ValueError(f"feature '{feature}' not found in explanations")
+        idx = feature_names.index(feature)
+
+        palette = palette or px.colors.qualitative.Plotly
+        fig = go.Figure()
+
+        for i, (split, expl) in enumerate(shap_dict.items()):
+            vals = np.asarray(expl.values)
+            if vals.ndim == 3 and vals.shape[1] == 1:
+                vals = vals[:, 0, :]
+            shap_col = vals[:, idx]
+            raw_col = np.asarray(expl.data)[:, idx]
+            if sample is not None and len(shap_col) > sample:
+                rng = np.random.default_rng(42)
+                choose = rng.choice(len(shap_col), sample, replace=False)
+                shap_col = shap_col[choose]
+                raw_col = raw_col[choose]
+
+            fig.add_trace(
+                go.Scattergl(
+                    x=raw_col,
+                    y=shap_col,
+                    mode="markers",
+                    marker=dict(color=palette[i % len(palette)], size=4, opacity=0.6),
+                    name=split,
+                    hovertemplate=f"{feature}: %{{x:.3f}}<br>SHAP: %{{y:.3f}}<extra></extra>",
+                )
+            )
+
+        fig.update_xaxes(title_text=feature)
+        fig.update_yaxes(title_text="SHAP value")
+
+        height = 450
+        title = title or f"SHAP Dependence – {feature}"
+        return self._style_plotly(fig, title=title, height=height)
+
+    def _build_shap_waterfall(
+        self,
+        expl: shap.Explanation,
+        *,
+        row_index: int = 0,
+        max_display: int = 10,
+        title: str | None = None,
+    ) -> go.Figure:
+        """Waterfall decomposition for a single record.
+
+        Parameters
+        ----------
+        expl:
+            SHAP explanation for one or more rows.
+        row_index:
+            Row index within ``expl`` to visualise.
+        max_display:
+            Maximum number of individual features to display before grouping the
+            remainder under ``"Others"``.
+        title:
+            Optional custom title.
+
+        Returns
+        -------
+        go.Figure
+            Plotly waterfall chart illustrating the prediction breakdown.
+        """
+
+        values = np.asarray(expl.values)
+        if values.ndim == 3 and values.shape[1] == 1:
+            values = values[:, 0, :]
+        if row_index >= len(values):
+            raise IndexError("row_index out of range")
+
+        shap_row = values[row_index]
+        names = list(expl.feature_names)
+
+        order = np.argsort(np.abs(shap_row))[::-1]
+        top = order[:max_display]
+        rest = order[max_display:]
+        contrib = shap_row[top].tolist()
+        labels = [names[i] for i in top]
+        if len(rest) > 0:
+            contrib.append(shap_row[rest].sum())
+            labels.append("Others")
+
+        base = (
+            expl.base_values[row_index]
+            if np.ndim(expl.base_values) > 0
+            else expl.base_values
+        )
+        pred = base + shap_row.sum()
+
+        fig = go.Figure(
+            go.Waterfall(
+                measure=["relative"] * len(contrib) + ["total"],
+                x=labels + ["Model Output"],
+                y=contrib + [pred - base],
+                base=base,
+                text=[f"{v:+.3f}" for v in contrib] + [f"{pred:.3f}"],
+                textposition="outside",
+            )
+        )
+        fig.update_xaxes(title_text="Feature")
+        fig.update_yaxes(title_text="Contribution")
+
+        height = 80 + 40 * len(labels)
+        title = title or f"SHAP Waterfall – row {row_index}"
+        return self._style_plotly(fig, title=title, height=height)
