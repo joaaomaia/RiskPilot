@@ -82,7 +82,7 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     shap = None  # type: ignore[assignment]
     logging.warning(
-        "Optional dependency 'shap' is missing. Install with `pip install shap`."
+        "Optional dependency 'shap' is missing. Install with `pip install riskpilot[viz]`."
     )
 
 try:  # pragma: no cover - optional dependency
@@ -2832,13 +2832,19 @@ class BinaryPerformanceEvaluator:
             return self._shap_explainer  # type: ignore[return-value]
 
         if shap is None:  # pragma: no cover - optional dependency guard
-            raise ImportError("shap is required for explanation functionality.")
+            raise ImportError(
+                "SHAP visualisations need the optional dependency 'shap'. "
+                "Install with `pip install riskpilot[viz]`."
+            )
 
         model = self.model
-        if isinstance(model, (XGBModel, LGBMModel)):
+        if (XGBModel is not object and isinstance(model, XGBModel)) or (
+            LGBMModel is not object and isinstance(model, LGBMModel)
+        ):
             explainer = shap.TreeExplainer(model)
         elif isinstance(model, LogisticRegression):
-            explainer = shap.LinearExplainer(model)
+            X_train = self.df_train[self.predictor_cols]
+            explainer = shap.LinearExplainer(model, X_train)
         else:
             X_train = self.df_train[self.predictor_cols]
             background = (
@@ -2874,7 +2880,10 @@ class BinaryPerformanceEvaluator:
         """
 
         if shap is None:  # pragma: no cover - optional dependency guard
-            raise ImportError("shap is required for explanation functionality.")
+            raise ImportError(
+                "SHAP visualisations need the optional dependency 'shap'. "
+                "Install with `pip install riskpilot[viz]`."
+            )
 
         expected_cols = list(getattr(self, "feature_names_", self.predictor_cols))
         if list(X.columns) != expected_cols:
@@ -3211,3 +3220,183 @@ class BinaryPerformanceEvaluator:
         fig.update_yaxes(autorange="reversed")
 
         return fig
+
+    def _build_shap_beeswarm(
+        self,
+        explanation: "shap.Explanation",
+        *,
+        max_display: int = 20,
+    ) -> go.Figure:
+        """Return a Plotly beeswarm plot for SHAP values."""
+
+        if shap is None:  # pragma: no cover - optional dependency guard
+            raise ImportError(
+                "SHAP visualisations need the optional dependency 'shap'. "
+                "Install with `pip install riskpilot[viz]`."
+            )
+
+        values = np.asarray(explanation.values)
+        if values.ndim == 3 and values.shape[1] == 1:
+            values = values[:, 0, :]
+
+        feature_names = list(explanation.feature_names)
+        df = pd.DataFrame(values, columns=feature_names)
+        df_long = df.melt(var_name="feature", value_name="shap_value")
+
+        mean_imp = df.abs().mean().sort_values(ascending=False)
+        top = mean_imp.head(max_display).index.tolist()
+        df_long = df_long[df_long["feature"].isin(top)]
+        df_long["feature"] = pd.Categorical(
+            df_long["feature"], categories=top[::-1], ordered=True
+        )
+
+        fig = px.strip(df_long, x="shap_value", y="feature", orientation="h")
+        fig.update_traces(jitter=0.4)
+        fig.update_layout(
+            template="simple_white",
+            title="SHAP Beeswarm",
+            height=min(50 + 20 * len(top), 800),
+            margin=dict(l=150, r=40, t=80, b=60),
+        )
+        return fig
+
+    def _build_shap_dependence(
+        self,
+        explanation: "shap.Explanation",
+        feature: str,
+        *,
+        color_by: str | None = None,
+    ) -> go.Figure:
+        """Return a Plotly dependence plot for a given feature."""
+
+        if shap is None:  # pragma: no cover - optional dependency guard
+            raise ImportError(
+                "SHAP visualisations need the optional dependency 'shap'. "
+                "Install with `pip install riskpilot[viz]`."
+            )
+
+        values = np.asarray(explanation.values)
+        if values.ndim == 3 and values.shape[1] == 1:
+            values = values[:, 0, :]
+
+        data = pd.DataFrame(explanation.data, columns=explanation.feature_names)
+        shap_df = pd.DataFrame(values, columns=explanation.feature_names)
+
+        df = pd.concat([data, shap_df.add_prefix("shap_")], axis=1)
+
+        if feature not in data.columns:
+            raise ValueError(f"feature '{feature}' not found in explanation")
+
+        shap_col = f"shap_{feature}"
+        color = df[color_by] if color_by else None
+
+        fig = px.scatter(
+            df,
+            x=feature,
+            y=shap_col,
+            color=color,
+            color_continuous_scale="RdBu",
+        )
+        fig.update_layout(
+            template="simple_white",
+            title=f"SHAP Dependence – {feature}",
+        )
+        return fig
+
+    def _build_shap_waterfall(
+        self,
+        explanation: "shap.Explanation",
+        *,
+        index: int = 0,
+        max_display: int = 10,
+    ) -> go.Figure:
+        """Return a Plotly waterfall plot for one observation."""
+
+        if shap is None:  # pragma: no cover - optional dependency guard
+            raise ImportError(
+                "SHAP visualisations need the optional dependency 'shap'. "
+                "Install with `pip install riskpilot[viz]`."
+            )
+
+        values = np.asarray(explanation.values)
+        if values.ndim == 3 and values.shape[1] == 1:
+            values = values[:, 0, :]
+
+        feature_names = list(explanation.feature_names)
+        shap_values = values[index]
+        base_value = (
+            explanation.base_values[index]
+            if isinstance(explanation.base_values, (list, np.ndarray))
+            else explanation.base_values
+        )
+
+        df = pd.DataFrame({"feature": feature_names, "value": shap_values})
+        df = df.reindex(df["value"].abs().sort_values(ascending=False).index)
+        df = df.head(max_display)
+
+        fig = go.Figure(
+            go.Waterfall(
+                orientation="v",
+                measure=["relative"] * len(df) + ["total"],
+                x=df["feature"].tolist() + ["base"],
+                y=df["value"].tolist() + [base_value],
+            )
+        )
+        fig.update_layout(
+            template="simple_white",
+            title=f"SHAP Waterfall – index {index}",
+            showlegend=False,
+        )
+        return fig
+
+    # ---- Public wrappers ---- #
+
+    def plot_shap_beeswarm(
+        self, split: str = "train", *, max_display: int = 20
+    ) -> go.Figure:
+        """Convenience wrapper around :meth:`_build_shap_beeswarm`."""
+
+        if shap is None:
+            raise RuntimeError(
+                "plot_shap_beeswarm requires 'shap'; install riskpilot[viz] to enable."
+            )
+
+        df_split = getattr(self, f"df_{split}")
+        expl = self._compute_shap_values(df_split[self.predictor_cols])
+        return self._build_shap_beeswarm(expl, max_display=max_display)
+
+    def plot_shap_dependence(
+        self,
+        feature: str,
+        *,
+        split: str = "train",
+        color_by: str | None = None,
+    ) -> go.Figure:
+        """Wrapper for :meth:`_build_shap_dependence`."""
+
+        if shap is None:
+            raise RuntimeError(
+                "plot_shap_dependence requires 'shap'; install riskpilot[viz] to enable."
+            )
+
+        df_split = getattr(self, f"df_{split}")
+        expl = self._compute_shap_values(df_split[self.predictor_cols])
+        return self._build_shap_dependence(expl, feature=feature, color_by=color_by)
+
+    def plot_shap_waterfall(
+        self,
+        index: int = 0,
+        *,
+        split: str = "train",
+        max_display: int = 10,
+    ) -> go.Figure:
+        """Wrapper for :meth:`_build_shap_waterfall`."""
+
+        if shap is None:
+            raise RuntimeError(
+                "plot_shap_waterfall requires 'shap'; install riskpilot[viz] to enable."
+            )
+
+        df_split = getattr(self, f"df_{split}")
+        expl = self._compute_shap_values(df_split[self.predictor_cols])
+        return self._build_shap_waterfall(expl, index=index, max_display=max_display)

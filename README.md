@@ -31,6 +31,10 @@ pip install riskpilot[viz]
 pip install kaleido  # required for saving Plotly figures as images
 ```
 
+!!! info "Optional Dependency"
+    SHAP visualisations are only available if you install the `viz` extra:
+    `pip install riskpilot[viz]`.
+
 ---
 
 ## 🚀 Exemplo Rápido
