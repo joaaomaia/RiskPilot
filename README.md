@@ -171,6 +171,19 @@ resultados/
 └── ks_evolution.png
 ```
 
+### Exporting artefacts
+
+```python
+figs = evaluator.plot_shap(plot_type="bar", save=False)
+exp_dir = evaluator.export_report(
+    figs=figs,
+    summary_df=summary_df,
+    bullets=bullets,
+    formats=("png", "svg", "html"),
+)
+print(f"Report written to → {exp_dir}")
+```
+
 ---
 
 ## LookAhead Generator
