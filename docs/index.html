@@ -93,6 +93,11 @@ fig.show()
     <p>Install the optional <code>viz</code> extra:<br>
        <code>pip install riskpilot[viz]</code></p>
   </details>
+  <details><summary>My notebook cell never finishes</summary>
+    <p>Check the logs for a warning that <code>shap.KernelExplainer</code> was used.
+       This fallback can be extremely slow. Switch to a tree or linear model or
+       sample your data.</p>
+  </details>
 </section>
 
 <footer>

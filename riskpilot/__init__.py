@@ -1,9 +1,12 @@
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 
 from .evaluation import BinaryPerformanceEvaluator, decile_analysis_plot
 from .synthetic import LookAhead
 
-__version__ = version("riskpilot")
+try:
+    __version__ = version("riskpilot")
+except PackageNotFoundError:  # pragma: no cover - fallback during tests
+    __version__ = "0.0.0"
 
 __all__ = [
     "BinaryPerformanceEvaluator",

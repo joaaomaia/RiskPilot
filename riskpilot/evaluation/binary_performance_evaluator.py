@@ -47,6 +47,7 @@ import logging
 import math
 import pickle
 import shutil
+import os
 import uuid
 import warnings
 from collections.abc import Mapping, Sequence
@@ -71,10 +72,22 @@ except ImportError:  # pragma: no cover - optional dependency
         "Optional dependency 'optbinning' is missing. "
         "Install with `pip install riskpilot[binning]`."
     )
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (average_precision_score, brier_score_loss,
-                             matthews_corrcoef, precision_score, recall_score,
-                             roc_auc_score)
+from sklearn.linear_model import (
+    LogisticRegression,
+    LinearRegression,
+    SGDClassifier,
+    SGDRegressor,
+)
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import (
+    average_precision_score,
+    brier_score_loss,
+    matthews_corrcoef,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+)
 
 try:
     import shap
@@ -2884,19 +2897,44 @@ class BinaryPerformanceEvaluator:
             )
 
         model = self.model
-        if (XGBModel is not object and isinstance(model, XGBModel)) or (
-            LGBMModel is not object and isinstance(model, LGBMModel)
+        if (
+            (XGBModel is not object and isinstance(model, XGBModel))
+            or (LGBMModel is not object and isinstance(model, LGBMModel))
+            or isinstance(
+                model,
+                (
+                    RandomForestClassifier,
+                    GradientBoostingClassifier,
+                    DecisionTreeClassifier,
+                ),
+            )
         ):
             explainer = shap.TreeExplainer(model)
-        elif isinstance(model, LogisticRegression):
+        elif isinstance(
+            model,
+            (
+                LogisticRegression,
+                LinearRegression,
+                SGDClassifier,
+                SGDRegressor,
+            ),
+        ):
             X_train = self.df_train[self.predictor_cols]
-            explainer = shap.LinearExplainer(model, X_train)
+            explainer = shap.LinearExplainer(
+                model, X_train, feature_perturbation="interventional"
+            )
         else:
+            logger = logging.getLogger("riskpilot")
             X_train = self.df_train[self.predictor_cols]
             background = (
                 shap.sample(X_train, 100, random_state=42)
                 if len(X_train) > 100
                 else X_train
+            )
+            logger.warning(
+                "\u26a0\ufe0f Falling back to shap.KernelExplainer. This could be "
+                "very slow for large datasets and many features. Consider using "
+                "a tree or linear model, or sample your data."
             )
             explainer = shap.KernelExplainer(
                 lambda m: model.predict_proba(m)[:, self._pos_class_idx],
@@ -2961,7 +2999,7 @@ class BinaryPerformanceEvaluator:
         return explanation
 
     def _compute_shap_values(
-        self, X: pd.DataFrame, *, split_name: str, use_cache: bool = True
+        self, X: pd.DataFrame, *, split_name: str, use_cache: bool = False
     ) -> "shap.Explanation":
         """Compute SHAP values for a pre-processed feature matrix.
 
@@ -2973,6 +3011,9 @@ class BinaryPerformanceEvaluator:
         ----------
         X : pandas.DataFrame
             Feature matrix with the same columns and order as ``self.predictor_cols``.
+        use_cache : bool, default ``False``
+            Persist SHAP values in-memory and on-disk. Can be globally enabled by
+            setting the environment variable ``BPE_SHAP_CACHE=1``.
 
         Returns
         -------
@@ -2985,6 +3026,13 @@ class BinaryPerformanceEvaluator:
                 "SHAP visualisations need the optional dependency 'shap'. "
                 "Install with `pip install riskpilot[viz]`."
             )
+
+        if os.getenv("BPE_SHAP_CACHE", "0") == "1":
+            use_cache = True
+
+        logger = logging.getLogger("riskpilot")
+        if not use_cache:
+            logger.debug("SHAP caching disabled (use_cache=False)")
 
         expected_cols = list(getattr(self, "feature_names_", self.predictor_cols))
         if list(X.columns) != expected_cols:
