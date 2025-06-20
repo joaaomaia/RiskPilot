@@ -46,13 +46,13 @@ import hashlib
 import logging
 import math
 import pickle
+import shutil
 import uuid
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
-
-import riskpilot
 
 import joblib
 import numpy as np
@@ -60,6 +60,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import seaborn as sns
+
+import riskpilot
 
 try:
     from optbinning import OptimalBinning
@@ -70,14 +72,9 @@ except ImportError:  # pragma: no cover - optional dependency
         "Install with `pip install riskpilot[binning]`."
     )
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import (
-    average_precision_score,
-    brier_score_loss,
-    matthews_corrcoef,
-    precision_score,
-    recall_score,
-    roc_auc_score,
-)
+from sklearn.metrics import (average_precision_score, brier_score_loss,
+                             matthews_corrcoef, precision_score, recall_score,
+                             roc_auc_score)
 
 try:
     import shap
@@ -3822,32 +3819,69 @@ class BinaryPerformanceEvaluator:
         )
         return self._build_shap_waterfall(expl, index=index, max_display=max_display)
 
-    def _export_shap_outputs(
+    def export_report(
         self,
-        figures: list[go.Figure],
-        summary_df: pd.DataFrame,
-        bullets: list[str] | None,
         *,
-        save: bool,
-        save_format: str | Sequence[str],
-    ) -> None:
-        """Save SHAP artefacts if requested (placeholder implementation)."""
+        figs: go.Figure | Sequence[go.Figure] | Mapping[str, go.Figure],
+        summary_df: pd.DataFrame | None = None,
+        bullets: list[str] | None = None,
+        export_dir: str | Path | None = None,
+        formats: Sequence[str] = ("png",),
+        name_prefix: str = "shap",
+        dpi: int = 150,
+        zip_bundle: bool = True,
+    ) -> Path:
+        """Persist figures and data to disk.
 
-        if not save or self.save_dir is None:
-            return
+        Returns
+        -------
+        Path
+            Directory containing the exported files.
+        """
 
-        formats = [save_format] if isinstance(save_format, str) else list(save_format)
-        for i, fig in enumerate(figures):
-            for fmt in formats:
-                path = self.save_dir / f"shap_{i}.{fmt}"
+        ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        base = Path(export_dir or self.save_dir or ".")
+        exp_dir = base / f"report_{ts}"
+        exp_dir.mkdir(parents=True, exist_ok=True)
+
+        def _save_fig(name: str, fig: go.Figure) -> None:
+            for ext in formats:
+                fpath = exp_dir / f"{name}.{ext}"
                 try:
-                    fig.write_image(path)
+                    if ext == "html":
+                        fig.write_html(fpath, full_html=False, include_plotlyjs="cdn")
+                    else:
+                        fig.write_image(fpath, scale=dpi / 72)
                 except ValueError as err:
                     if "kaleido" in str(err).lower():
                         raise RuntimeError(
-                            "Plotly image export requires the 'kaleido' package. Install it with 'pip install kaleido'."
+                            "Static export requires the 'kaleido' package. Try `pip install kaleido`."
                         ) from err
                     raise
+
+        if isinstance(figs, go.Figure):
+            _save_fig("fig_0", figs)
+        elif isinstance(figs, Mapping):
+            for name, fig in figs.items():
+                _save_fig(name, fig)
+        else:
+            for i, fig in enumerate(figs):
+                _save_fig(f"fig_{i}", fig)
+
+        if summary_df is not None:
+            summary_df.to_csv(exp_dir / f"{name_prefix}_summary.csv", index=False)
+            summary_df.to_html(exp_dir / f"{name_prefix}_summary.html", index=False)
+
+        if bullets:
+            (exp_dir / "insights.txt").write_text("\n".join(bullets), encoding="utf-8")
+
+        if zip_bundle:
+            try:
+                shutil.make_archive(str(exp_dir), "zip", root_dir=exp_dir)
+            except Exception:
+                pass
+
+        return exp_dir
 
     def plot_shap(
         self,
@@ -3870,6 +3904,7 @@ class BinaryPerformanceEvaluator:
         summary: bool = False,
         save: bool = False,
         save_format: str | Sequence[str] = "png",
+        zip_bundle: bool = False,
         return_data: bool = False,
         **kwargs,
     ) -> go.Figure | list[go.Figure] | dict[str, Any]:
@@ -3980,8 +4015,12 @@ class BinaryPerformanceEvaluator:
         )
 
         if save:
-            self._export_shap_outputs(
-                figs, summary_df, bullets, save=save, save_format=save_format
+            self.export_report(
+                figs=figs,
+                summary_df=summary_df,
+                bullets=bullets,
+                formats=(save_format,) if isinstance(save_format, str) else save_format,
+                zip_bundle=zip_bundle,
             )
 
         result: go.Figure | list[go.Figure] | dict[str, Any]

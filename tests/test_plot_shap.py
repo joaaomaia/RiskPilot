@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pandas as pd
 import plotly.graph_objects as go
 import pytest
@@ -42,7 +44,7 @@ def test_plot_shap_smoke(plot_type, monkeypatch):
         date_col="date",
     )
 
-    monkeypatch.setattr(bev, "_export_shap_outputs", lambda *a, **k: None)
+    monkeypatch.setattr(bev, "export_report", lambda *a, **k: Path("."))
 
     kwargs = {"max_display": 3}
     if plot_type in {"dependence", "trend"}:
