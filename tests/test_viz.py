@@ -82,6 +82,6 @@ def test_shap_beeswarm_runs():
         date_col="date",
     )
     X = train[["a", "b", "c"]]
-    expl = bev._compute_shap_values(X)
+    expl = bev._compute_shap_values(X, split_name="train")
     fig = bev._build_shap_beeswarm(expl)
     assert isinstance(fig, go.Figure)

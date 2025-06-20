@@ -27,6 +27,6 @@ def test_beeswarm_runs():
         id_cols=["id"],
     )
 
-    expl = bev._compute_shap_values(train[bev.predictor_cols])
+    expl = bev._compute_shap_values(train[bev.predictor_cols], split_name="train")
     fig = bev._build_shap_beeswarm(expl)
     assert isinstance(fig, go.Figure)
