@@ -117,6 +117,15 @@ def _rgba(color: str, alpha: float) -> str:
     return color
 
 
+def _style_plotly(fig: go.Figure, *, title: str | None = None) -> go.Figure:
+    """Apply common styling to Plotly figures."""
+
+    fig.update_layout(template="simple_white", title=title, legend=dict(x=1.02))
+    fig.update_xaxes(showgrid=False, tickformat="%Y-%m")
+    fig.update_yaxes(showgrid=False)
+    return fig
+
+
 # --- Helper utilities ---
 
 
@@ -3347,6 +3356,235 @@ class BinaryPerformanceEvaluator:
             title=f"SHAP Waterfall – index {index}",
             showlegend=False,
         )
+        return fig
+
+    def _prepare_shap_time_series(
+        self,
+        shap_dict: dict[str, "shap.Explanation"],
+        *,
+        date_lookup: dict[str, pd.Series],
+        freq: str = "M",
+        feature_groups: dict[str, Sequence[str]] | None = None,
+        max_display: int | None = None,
+        min_samples: int = 30,
+    ) -> pd.DataFrame:
+        """Aggregate SHAP values over time windows per split.
+
+        Parameters
+        ----------
+        shap_dict:
+            Mapping of split name to :class:`shap.Explanation` objects.
+        date_lookup:
+            Mapping of split name to date series aligned with SHAP rows.
+        freq:
+            Resample frequency, e.g. ``"M"`` or ``"Q"``.
+        feature_groups:
+            Optional semantic buckets ``{group: [features...]}``.
+        max_display:
+            If set, keep only the global top ``k`` features.
+        min_samples:
+            Drop periods with fewer records than this value.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Long-form table with columns ``period``, ``feature``, ``split`` and
+            ``importance``.
+        """
+
+        feature_groups = feature_groups or {}
+        group_members = {f for fs in feature_groups.values() for f in fs}
+
+        all_frames: list[pd.DataFrame] = []
+
+        for split, expl in shap_dict.items():
+            if split not in date_lookup:
+                raise KeyError(f"Missing dates for split '{split}'")
+
+            dates = date_lookup[split].reset_index(drop=True)
+            values = np.asarray(expl.values)
+            if values.ndim == 3 and values.shape[1] == 1:
+                values = values[:, 0, :]
+            if len(dates) != values.shape[0]:
+                raise ValueError("Date vector must align with SHAP rows")
+
+            df = pd.DataFrame(values, columns=expl.feature_names).abs()
+            df["__period"] = pd.to_datetime(dates).dt.to_period(freq)
+
+            if feature_groups:
+                missing = [f for f in group_members if f not in df.columns]
+                if missing:
+                    raise ValueError(f"Feature '{missing[0]}' specified in groups not found")
+                grouped = {g: df[cols].sum(axis=1) for g, cols in feature_groups.items()}
+                remaining = df.drop(columns=set(group_members), errors="ignore")
+                df = pd.concat([remaining, pd.DataFrame(grouped)], axis=1)
+
+            long_df = df.melt("__period", var_name="feature", value_name="importance")
+            agg = long_df.groupby(["__period", "feature"], observed=True).importance.mean()
+            agg = agg.reset_index()
+
+            counts = df["__period"].value_counts()
+            valid_periods = counts[counts >= min_samples].index
+            agg = agg[agg["__period"].isin(valid_periods)]
+
+            agg["split"] = split
+            all_frames.append(agg)
+
+        if not all_frames:
+            return pd.DataFrame(columns=["period", "feature", "split", "importance"])
+
+        ts_df = pd.concat(all_frames, ignore_index=True)
+        ts_df.rename(columns={"__period": "period"}, inplace=True)
+
+        if max_display is not None:
+            totals = ts_df.groupby("feature")["importance"].sum()
+            keep = totals.nlargest(max_display).index
+            ts_df = ts_df[ts_df["feature"].isin(keep)]
+
+        ts_df["period"] = ts_df["period"].astype(f"period[{freq}]")
+        return ts_df[["period", "feature", "split", "importance"]]
+
+    def _build_shap_trend_plot(
+        self,
+        ts_df: pd.DataFrame,
+        *,
+        feature: str,
+        splits: list[str] | None = None,
+        color_palette: list[str] | None = None,
+        drift_df: pd.DataFrame | None = None,
+        reference_split: str | None = None,
+        ref_band: float | None = 0.2,
+        title: str | None = None,
+    ) -> go.Figure:
+        """Return line chart of mean |SHAP| over time with optional drift flags.
+
+        Parameters
+        ----------
+        ts_df:
+            Output from :meth:`_prepare_shap_time_series`.
+        feature:
+            Feature to plot.
+        splits:
+            Restrict to these splits. ``None`` uses all available.
+        color_palette:
+            Optional list of colours per split.
+        drift_df:
+            Optional DataFrame with drift flags (``period``, ``feature``, ``split``,
+            ``flag``, ``metric``, ``value``).
+        reference_split:
+            Split used as baseline for the reference band.
+        ref_band:
+            ± percentage width around ``reference_split`` line. ``None`` disables.
+        title:
+            Custom plot title.
+
+        Returns
+        -------
+        go.Figure
+            Styled Plotly figure with one trace per split.
+
+        Raises
+        ------
+        KeyError
+            If ``feature`` is not present in ``ts_df``.
+        ValueError
+            If ``ts_df`` is empty.
+
+        Examples
+        --------
+        >>> ts_df = evaluator._prepare_shap_time_series(shap_dict, date_lookup)
+        >>> drift = evaluator._psi_flags
+        >>> fig = evaluator._build_shap_trend_plot(
+        ...     ts_df,
+        ...     feature="util_pct",
+        ...     splits=["train", "test"],
+        ...     drift_df=drift,
+        ...     reference_split="train",
+        ... )
+        >>> fig.show()
+        """
+
+        if ts_df.empty:
+            raise ValueError("ts_df must not be empty")
+        if feature not in ts_df["feature"].unique():
+            raise KeyError(f"feature '{feature}' not found")
+
+        df_feat = ts_df[ts_df["feature"] == feature].copy()
+        available_splits = list(df_feat["split"].unique())
+        splits = splits or available_splits
+
+        palette = color_palette or px.colors.qualitative.Safe
+        colors = {s: palette[i % len(palette)] for i, s in enumerate(splits)}
+
+        fig = go.Figure()
+
+        for split in splits:
+            df_split = df_feat[df_feat["split"] == split].sort_values("period")
+            fig.add_trace(
+                go.Scatter(
+                    x=df_split["period"].astype(str),
+                    y=df_split["importance"],
+                    mode="lines+markers",
+                    name=split,
+                    marker_color=colors[split],
+                )
+            )
+
+        if reference_split and ref_band is not None and reference_split in splits:
+            df_ref = df_feat[df_feat["split"] == reference_split].sort_values("period")
+            upper = df_ref["importance"] * (1 + ref_band)
+            lower = df_ref["importance"] * (1 - ref_band)
+            x = df_ref["period"].astype(str)
+            color = _rgba(colors[reference_split], 0.15)
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=upper,
+                    mode="lines",
+                    line=dict(width=0),
+                    hoverinfo="skip",
+                    showlegend=False,
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=lower,
+                    mode="lines",
+                    line=dict(width=0),
+                    fill="tonexty",
+                    fillcolor=color,
+                    hoverinfo="skip",
+                    showlegend=False,
+                )
+            )
+
+        if drift_df is not None:
+            df_drift = drift_df[
+                (drift_df["feature"] == feature) & drift_df["flag"]
+            ].copy()
+            for split in splits:
+                df_split = df_drift[df_drift["split"] == split]
+                if df_split.empty:
+                    continue
+                y_lookup = df_feat[df_feat["split"] == split].set_index("period")[
+                    "importance"
+                ]
+                y_vals = y_lookup.reindex(df_split["period"]).values
+                hover = [f"{m}: {v:.3f}" for m, v in zip(df_split["metric"], df_split["value"])]
+                fig.add_trace(
+                    go.Scatter(
+                        x=df_split["period"].astype(str),
+                        y=y_vals,
+                        mode="markers",
+                        marker=dict(symbol="x", color=colors[split], size=10),
+                        name=f"{split} drift",
+                        hovertext=hover,
+                        showlegend=False,
+                    )
+                )
+
+        _style_plotly(fig, title=title or f"SHAP Trend – {feature}")
         return fig
 
     # ---- Public wrappers ---- #
