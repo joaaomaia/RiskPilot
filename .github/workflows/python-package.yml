@@ -4,10 +4,25 @@ on: [push, pull_request]
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        config: ["with-shap", "no-shap"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-      - run: pip install -e .[dev,viz,binning]
-      - run: pytest --cov=riskpilot
+          python-version: "3.11"
+      - name: Install
+        run: |
+          if [ "${{ matrix.config }}" = "with-shap" ]; then
+            pip install -e .[dev,viz,binning]
+          else
+            pip install -e .[dev]
+          fi
+      - name: Run tests
+        run: |
+          if [ "${{ matrix.config }}" = "no-shap" ]; then
+            pytest tests/test_shap_cache.py
+          else
+            pytest --cov=riskpilot
+          fi
