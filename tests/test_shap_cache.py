@@ -1,4 +1,6 @@
+import os
 import time
+import joblib
 import numpy as np
 import pandas as pd
 from sklearn.datasets import make_classification
@@ -50,27 +52,61 @@ def _evaluator(tmp_path, monkeypatch):
 def test_cache_hit(tmp_path, monkeypatch):
     bev = _evaluator(tmp_path, monkeypatch)
     t0 = time.time()
-    bev._compute_shap_values(bev.df_train[bev.predictor_cols], split_name="train")
+    bev._compute_shap_values(
+        bev.df_train[bev.predictor_cols], split_name="train", use_cache=True
+    )
     t1 = time.time() - t0
     t0 = time.time()
-    bev._compute_shap_values(bev.df_train[bev.predictor_cols], split_name="train")
+    bev._compute_shap_values(
+        bev.df_train[bev.predictor_cols], split_name="train", use_cache=True
+    )
     t2 = time.time() - t0
     assert t2 < t1 * 0.5
 
 
 def test_disk_cache(tmp_path, monkeypatch):
     bev1 = _evaluator(tmp_path, monkeypatch)
-    bev1._compute_shap_values(bev1.df_train[bev1.predictor_cols], split_name="train")
+    bev1._compute_shap_values(
+        bev1.df_train[bev1.predictor_cols], split_name="train", use_cache=True
+    )
     bev2 = _evaluator(tmp_path, monkeypatch)
-    bev2._compute_shap_values(bev2.df_train[bev2.predictor_cols], split_name="train")
+    bev2._compute_shap_values(
+        bev2.df_train[bev2.predictor_cols], split_name="train", use_cache=True
+    )
     assert bev2.cache_stats()["disk_hits"] == 1
 
 
 def test_clear_cache(tmp_path, monkeypatch):
     bev = _evaluator(tmp_path, monkeypatch)
-    bev._compute_shap_values(bev.df_train[bev.predictor_cols], split_name="train")
+    bev._compute_shap_values(
+        bev.df_train[bev.predictor_cols], split_name="train", use_cache=True
+    )
     path = bev._cache_path("train")
     assert path.is_file()
     bev.clear_shap_cache()
     assert not path.exists()
     assert bev.cache_stats()["size_mb"] == 0
+
+
+def test_no_cache_by_default(tmp_path, monkeypatch):
+    bev = _evaluator(tmp_path, monkeypatch)
+
+    called = False
+
+    def fake_dump(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(joblib, "dump", fake_dump)
+    bev._compute_shap_values(bev.df_train[bev.predictor_cols], split_name="train")
+    assert not called
+
+
+def test_env_var_enables_cache(tmp_path, monkeypatch):
+    os.environ["BPE_SHAP_CACHE"] = "1"
+    try:
+        bev = _evaluator(tmp_path, monkeypatch)
+        bev._compute_shap_values(bev.df_train[bev.predictor_cols], split_name="train")
+        assert bev._cache_path("train").is_file()
+    finally:
+        os.environ.pop("BPE_SHAP_CACHE", None)

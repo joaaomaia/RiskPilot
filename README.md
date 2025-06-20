@@ -184,6 +184,9 @@ exp_dir = evaluator.export_report(
 print(f"Report written to → {exp_dir}")
 ```
 
+SHAP values are not cached by default. Pass ``use_cache=True`` or set the
+environment variable ``BPE_SHAP_CACHE=1`` if you need to persist them.
+
 ---
 
 ## LookAhead Generator
