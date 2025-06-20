@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>RiskPilot – SHAP Diagnostics Guide</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Developer guide for RiskPilot, a lightweight SHAP and Plotly toolkit for model explainability.">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "RiskPilot",
+    "description": "Model explainability toolkit using SHAP and Plotly.",
+    "url": "https://github.com/joaaomaia/riskpilot",
+    "applicationCategory": "DataVisualization"
+  }
+  </script>
+  <link href="https://cdn.jsdelivr.net/npm/prismjs@1/themes/prism.css" rel="stylesheet">
+  <style>
+    body{font-family:system-ui,Arial;padding:0 1rem;max-width:1024px;margin:auto}
+    header{padding:2rem 0;text-align:center}
+    h1{font-size:2.2rem;margin:0}
+    nav ul{display:flex;gap:1rem;flex-wrap:wrap;padding:0;list-style:none}
+    nav a{text-decoration:none}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1.2rem}
+    footer{margin-top:4rem;padding:1rem 0;font-size:.9rem;text-align:center;color:#666}
+  </style>
+</head>
+<body>
+<header>
+  <h1>RiskPilot <small style="font-size:1rem;">– Model Explainability Toolkit</small></h1>
+  <p>A lightweight wrapper around SHAP + Plotly for audit-ready visual diagnostics.</p>
+</header>
+
+<nav>
+  <ul>
+    <li><a href="#quick">Quick Start</a></li>
+    <li><a href="#api">API Reference</a></li>
+    <li><a href="#gallery">Plot Gallery</a></li>
+    <li><a href="#faq">FAQ</a></li>
+  </ul>
+</nav>
+
+<section id="quick">
+  <h2>Quick Start</h2>
+  <pre><code class="language-python">
+from riskpilot.evaluation import BinaryPerformanceEvaluator
+evaluator = BinaryPerformanceEvaluator(...)
+fig = evaluator.plot_shap(plot_type="bar", summary=True)
+fig.show()
+  </code></pre>
+</section>
+
+<section id="api">
+  <h2>API Reference</h2>
+  <ul>
+    <li><a href="#compute_metrics">compute_metrics()</a></li>
+    <li><a href="#plot_shap">plot_shap()</a></li>
+    <li><a href="#export_report">export_report()</a></li>
+    <li><a href="#clear_shap_cache">clear_shap_cache()</a></li>
+  </ul>
+  <h3 id="compute_metrics">compute_metrics()</h3>
+  <p>Calculate metrics like MCC, AUC, Precision and more.</p>
+  <pre><code class="language-python">compute_metrics(by_date_col=False)</code></pre>
+
+  <h3 id="plot_shap">plot_shap()</h3>
+  <p>Unified entry-point for all SHAP visualisations. Parameters:</p>
+  <pre><code class="language-python">plot_shap(plot_type="bar", splits=["train","test"], ...)</code></pre>
+
+  <h3 id="export_report">export_report()</h3>
+  <p>Persist figures + CSV summary + bullets; returns Path.</p>
+
+  <h3 id="clear_shap_cache">clear_shap_cache()</h3>
+  <p>Delete cached SHAP values for given splits.</p>
+</section>
+
+<section id="gallery">
+  <h2>Plot Gallery</h2>
+  <div class="grid">
+    <figure><img src="img/bar.png" alt="Bar importance"/><figcaption>Bar importance</figcaption></figure>
+    <figure><img src="img/beeswarm.png" alt="Beeswarm plot"/><figcaption>Beeswarm</figcaption></figure>
+    <figure><img src="img/dependence.png" alt="Dependence plot"/><figcaption>Dependence</figcaption></figure>
+    <figure><img src="img/waterfall.png" alt="Waterfall plot"/><figcaption>Waterfall</figcaption></figure>
+  </div>
+</section>
+
+<section id="faq">
+  <h2>FAQ</h2>
+  <details><summary>Kaleido error when saving PNG</summary>
+    <p>Install <code>pip install kaleido</code> and retry.</p>
+  </details>
+  <details><summary>"No module named shap"</summary>
+    <p>Install the optional <code>viz</code> extra:<br>
+       <code>pip install riskpilot[viz]</code></p>
+  </details>
+</section>
+
+<footer>
+  RiskPilot © 2025 – version {{__version__}}
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1/prism.min.js"></script>
+</body>
+</html>
