@@ -52,6 +52,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
 
+import riskpilot
+
 import joblib
 import numpy as np
 import pandas as pd
@@ -293,6 +295,19 @@ class BinaryPerformanceEvaluator:
 
         self._score_datasets()
         self._assign_groups()
+
+        # --- SHAP caching ---
+        self._shap_cache: dict[tuple[str, str], Any] = {}
+        self._cache_hits = 0
+        self._cache_misses = 0
+        self._disk_hits = 0
+        self._fingerprint = hashlib.sha256(
+            pickle.dumps(self.model, protocol=4)[:2_000_000]
+            + b"|"
+            + ",".join(self.predictor_cols).encode()
+            + b"|"
+            + riskpilot.__version__.encode()
+        ).hexdigest()[:12]
 
     ## ---------- public API ----------
 
@@ -2895,7 +2910,62 @@ class BinaryPerformanceEvaluator:
         self.feature_names_ = list(self.predictor_cols)
         return explainer
 
-    def _compute_shap_values(self, X: pd.DataFrame) -> "shap.Explanation":
+    # ---- SHAP cache helpers ---- #
+
+    def _cache_path(self, split: str) -> Path:
+        base = self.save_dir or Path(".")
+        return base / "shap_cache" / self._fingerprint / f"{split}.joblib"
+
+    def _save_shap_to_disk(self, split: str, explanation: Any) -> None:
+        path = self._cache_path(split)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            joblib.dump(explanation, path, compress=3)
+        except Exception as err:  # pragma: no cover
+            logging.getLogger("riskpilot").warning("SHAP cache write failed: %s", err)
+
+    def _load_shap_from_disk(self, split: str) -> Any | None:
+        path = self._cache_path(split)
+        if not path.is_file():
+            return None
+        try:
+            obj = joblib.load(path)
+        except Exception:
+            return None
+        n_features = getattr(obj, "values", np.array([])).shape[-1]
+        if n_features != len(self.predictor_cols):
+            return None
+        return obj
+
+    def _compute_shap_values_no_cache(self, X: pd.DataFrame) -> "shap.Explanation":
+        if shap is None:  # pragma: no cover - optional dependency guard
+            raise ImportError(
+                "SHAP visualisations need the optional dependency 'shap'. "
+                "Install with `pip install riskpilot[viz]`."
+            )
+
+        expected_cols = list(getattr(self, "feature_names_", self.predictor_cols))
+        if list(X.columns) != expected_cols:
+            raise ValueError(
+                "Input features must match model training columns: " f"{expected_cols}"
+            )
+
+        explainer = self._get_shap_explainer()
+        if isinstance(explainer, shap.TreeExplainer):
+            explanation = explainer(X, check_additivity=False)
+        else:
+            explanation = explainer.shap_values(X)
+            explanation = shap.Explanation(
+                np.asarray(explanation),
+                base_values=explainer.expected_value,
+                data=X.values,
+                feature_names=expected_cols,
+            )
+        return explanation
+
+    def _compute_shap_values(
+        self, X: pd.DataFrame, *, split_name: str, use_cache: bool = True
+    ) -> "shap.Explanation":
         """Compute SHAP values for a pre-processed feature matrix.
 
         The columns in ``X`` must match those used during model training. For
@@ -2925,20 +2995,50 @@ class BinaryPerformanceEvaluator:
                 "Input features must match model training columns: " f"{expected_cols}"
             )
 
-        explainer = self._get_shap_explainer()
+        if use_cache and (split_name, self._fingerprint) in self._shap_cache:
+            self._cache_hits += 1
+            return self._shap_cache[(split_name, self._fingerprint)]
 
-        if isinstance(explainer, shap.TreeExplainer):
-            explanation = explainer(X, check_additivity=False)
-        else:
-            explanation = explainer.shap_values(X)
-            explanation = shap.Explanation(
-                np.asarray(explanation),
-                base_values=explainer.expected_value,
-                data=X.values,
-                feature_names=expected_cols,
-            )
+        if use_cache:
+            disk = self._load_shap_from_disk(split_name)
+            if disk is not None:
+                self._disk_hits += 1
+                self._shap_cache[(split_name, self._fingerprint)] = disk
+                return disk
 
+        explanation = self._compute_shap_values_no_cache(X)
+
+        if use_cache:
+            self._cache_misses += 1
+            self._shap_cache[(split_name, self._fingerprint)] = explanation
+            self._save_shap_to_disk(split_name, explanation)
         return explanation
+
+    def clear_shap_cache(self, *, splits: list[str] | None = None) -> None:
+        """Delete cache files for given splits."""
+
+        splits = self._infer_splits(splits)
+        for split in splits:
+            self._shap_cache.pop((split, self._fingerprint), None)
+            path = self._cache_path(split)
+            if path.is_file():
+                try:
+                    path.unlink()
+                except Exception:  # pragma: no cover
+                    pass
+
+    def cache_stats(self) -> dict[str, Any]:
+        """Return cache statistics."""
+
+        mem = sum(
+            getattr(v, "values", np.array([])).nbytes for v in self._shap_cache.values()
+        )
+        return {
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "disk_hits": self._disk_hits,
+            "size_mb": mem / (1024 * 1024),
+        }
 
     def _prepare_shap_summary(
         self,
@@ -3677,7 +3777,9 @@ class BinaryPerformanceEvaluator:
             )
 
         df_split = getattr(self, f"df_{split}")
-        expl = self._compute_shap_values(df_split[self.predictor_cols])
+        expl = self._compute_shap_values(
+            df_split[self.predictor_cols], split_name=split
+        )
         return self._build_shap_beeswarm(expl, max_display=max_display)
 
     def plot_shap_dependence(
@@ -3695,7 +3797,9 @@ class BinaryPerformanceEvaluator:
             )
 
         df_split = getattr(self, f"df_{split}")
-        expl = self._compute_shap_values(df_split[self.predictor_cols])
+        expl = self._compute_shap_values(
+            df_split[self.predictor_cols], split_name=split
+        )
         return self._build_shap_dependence(expl, feature=feature, color_by=color_by)
 
     def plot_shap_waterfall(
@@ -3713,7 +3817,9 @@ class BinaryPerformanceEvaluator:
             )
 
         df_split = getattr(self, f"df_{split}")
-        expl = self._compute_shap_values(df_split[self.predictor_cols])
+        expl = self._compute_shap_values(
+            df_split[self.predictor_cols], split_name=split
+        )
         return self._build_shap_waterfall(expl, index=index, max_display=max_display)
 
     def _export_shap_outputs(
@@ -3776,7 +3882,9 @@ class BinaryPerformanceEvaluator:
 
         splits = self._infer_splits(splits)
         shap_dict = {
-            s: self._compute_shap_values(getattr(self, f"df_{s}")[self.predictor_cols])
+            s: self._compute_shap_values(
+                getattr(self, f"df_{s}")[self.predictor_cols], split_name=s
+            )
             for s in splits
         }
 
