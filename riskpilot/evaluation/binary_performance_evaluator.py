@@ -48,16 +48,16 @@ import math
 import pickle
 import uuid
 import warnings
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Union
-from collections.abc import Sequence
 
 import joblib
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 import seaborn as sns
-import plotly.express as px
 
 try:
     from optbinning import OptimalBinning
@@ -2817,6 +2817,31 @@ class BinaryPerformanceEvaluator:
         ]
         return numeric_vars
 
+    def _infer_splits(self, splits: Sequence[str] | None) -> list[str]:
+        """Return valid split names in order.
+
+        Parameters
+        ----------
+        splits : Sequence[str] | None
+            Desired splits (``"train"``, ``"test"``, ``"val"``). ``None`` uses all
+            available.
+
+        Returns
+        -------
+        list[str]
+            Validated list of split names.
+        """
+
+        available = ["train", "test"] + (["val"] if self.df_val is not None else [])
+        if splits is None:
+            return available
+        result = []
+        for s in splits:
+            if s not in available:
+                raise KeyError(f"split '{s}' not available")
+            result.append(s)
+        return result
+
     def _get_shap_explainer(self) -> "shap.explainers._explainer.Explainer":
         """Return and cache the appropriate SHAP explainer for the model.
 
@@ -2934,8 +2959,6 @@ class BinaryPerformanceEvaluator:
             pandas.DataFrame: Long-format DataFrame with columns ``feature``,
             ``split``, ``importance`` and ``direction``.
         """
-
-        logger = logging.getLogger("riskpilot")
 
         if not shap_dict:
             return pd.DataFrame(columns=["feature", "split", "importance", "direction"])
@@ -3086,6 +3109,51 @@ class BinaryPerformanceEvaluator:
         df["variation"] = variation
         df["variation_flag"] = variation >= variation_threshold
         return df
+
+    def _make_shap_bullets(
+        self,
+        df: pd.DataFrame,
+        *,
+        reference_split: str,
+        top_k: int,
+        variation_threshold: float,
+    ) -> list[str]:
+        """Return executive summary bullet points."""
+
+        if df.empty or reference_split not in df["split"].unique():
+            return []
+
+        order = (
+            df[df["split"] == reference_split]
+            .sort_values("importance", ascending=False)["feature"]
+            .tolist()
+        )
+        top_features = order[:top_k]
+        bullets: list[str] = []
+        eps = np.finfo(float).eps
+        for feat in top_features:
+            ref_imp = df[(df["feature"] == feat) & (df["split"] == reference_split)][
+                "importance"
+            ].iloc[0]
+            parts = []
+            for split in df["split"].unique():
+                if split == reference_split:
+                    continue
+                row = df[(df["feature"] == feat) & (df["split"] == split)]
+                if row.empty:
+                    continue
+                imp = row["importance"].iloc[0]
+                rel = (imp - ref_imp) / (abs(ref_imp) + eps)
+                if abs(rel) < variation_threshold:
+                    arrow = "↔"
+                else:
+                    arrow = "↑" if rel > 0 else "↓"
+                parts.append(f"{split} {arrow}")
+            if parts:
+                bullets.append(f"{feat}: " + ", ".join(parts))
+            else:
+                bullets.append(feat)
+        return bullets
 
     def _build_shap_bar_plot(
         self,
@@ -3414,13 +3482,19 @@ class BinaryPerformanceEvaluator:
             if feature_groups:
                 missing = [f for f in group_members if f not in df.columns]
                 if missing:
-                    raise ValueError(f"Feature '{missing[0]}' specified in groups not found")
-                grouped = {g: df[cols].sum(axis=1) for g, cols in feature_groups.items()}
+                    raise ValueError(
+                        f"Feature '{missing[0]}' specified in groups not found"
+                    )
+                grouped = {
+                    g: df[cols].sum(axis=1) for g, cols in feature_groups.items()
+                }
                 remaining = df.drop(columns=set(group_members), errors="ignore")
                 df = pd.concat([remaining, pd.DataFrame(grouped)], axis=1)
 
             long_df = df.melt("__period", var_name="feature", value_name="importance")
-            agg = long_df.groupby(["__period", "feature"], observed=True).importance.mean()
+            agg = long_df.groupby(
+                ["__period", "feature"], observed=True
+            ).importance.mean()
             agg = agg.reset_index()
 
             counts = df["__period"].value_counts()
@@ -3571,7 +3645,10 @@ class BinaryPerformanceEvaluator:
                     "importance"
                 ]
                 y_vals = y_lookup.reindex(df_split["period"]).values
-                hover = [f"{m}: {v:.3f}" for m, v in zip(df_split["metric"], df_split["value"])]
+                hover = [
+                    f"{m}: {v:.3f}"
+                    for m, v in zip(df_split["metric"], df_split["value"])
+                ]
                 fig.add_trace(
                     go.Scatter(
                         x=df_split["period"].astype(str),
@@ -3638,3 +3715,174 @@ class BinaryPerformanceEvaluator:
         df_split = getattr(self, f"df_{split}")
         expl = self._compute_shap_values(df_split[self.predictor_cols])
         return self._build_shap_waterfall(expl, index=index, max_display=max_display)
+
+    def _export_shap_outputs(
+        self,
+        figures: list[go.Figure],
+        summary_df: pd.DataFrame,
+        bullets: list[str] | None,
+        *,
+        save: bool,
+        save_format: str | Sequence[str],
+    ) -> None:
+        """Save SHAP artefacts if requested (placeholder implementation)."""
+
+        if not save or self.save_dir is None:
+            return
+
+        formats = [save_format] if isinstance(save_format, str) else list(save_format)
+        for i, fig in enumerate(figures):
+            for fmt in formats:
+                path = self.save_dir / f"shap_{i}.{fmt}"
+                try:
+                    fig.write_image(path)
+                except ValueError as err:
+                    if "kaleido" in str(err).lower():
+                        raise RuntimeError(
+                            "Plotly image export requires the 'kaleido' package. Install it with 'pip install kaleido'."
+                        ) from err
+                    raise
+
+    def plot_shap(
+        self,
+        *,
+        splits: list[str] | None = None,
+        plot_type: Literal[
+            "bar",
+            "layered",
+            "beeswarm",
+            "dependence",
+            "trend",
+            "waterfall",
+        ] = "bar",
+        reference_split: str | None = "train",
+        feature_groups: dict[str, Sequence[str]] | None = None,
+        focus_feature: str | None = None,
+        record_index: int | None = None,
+        variation_threshold: float = 0.50,
+        annotate_variation: bool = True,
+        summary: bool = False,
+        save: bool = False,
+        save_format: str | Sequence[str] = "png",
+        return_data: bool = False,
+        **kwargs,
+    ) -> go.Figure | list[go.Figure] | dict[str, Any]:
+        """High-level SHAP visualisation interface."""
+
+        if shap is None:
+            raise RuntimeError(
+                "plot_shap requires 'shap'; install riskpilot[viz] to enable."
+            )
+
+        splits = self._infer_splits(splits)
+        shap_dict = {
+            s: self._compute_shap_values(getattr(self, f"df_{s}")[self.predictor_cols])
+            for s in splits
+        }
+
+        max_display = int(kwargs.pop("max_display", 20))
+        summary_df = self._prepare_shap_summary(
+            shap_dict, max_display=max_display, feature_groups=feature_groups
+        )
+        summary_df = self._flag_variations(
+            summary_df,
+            reference_split=reference_split,
+            variation_threshold=variation_threshold,
+        )
+
+        figs: list[go.Figure]
+        if plot_type in {"bar", "layered"}:
+            params = {
+                k: kwargs.pop(k)
+                for k in ["color_palette", "title", "directionality"]
+                if k in kwargs
+            }
+            fig = self._build_shap_bar_plot(
+                summary_df,
+                plot_type=plot_type,
+                annotate_variation=annotate_variation,
+                **params,
+            )
+            figs = [fig]
+        elif plot_type == "beeswarm":
+            bee_params = {k: kwargs.pop(k) for k in ["max_display"] if k in kwargs}
+            figs = [
+                self._build_shap_beeswarm(shap_dict[s], **bee_params) for s in splits
+            ]
+        elif plot_type == "dependence":
+            if not focus_feature:
+                raise ValueError("focus_feature is required for plot_type='dependence'")
+            dep_params = {k: kwargs.pop(k) for k in ["color_by"] if k in kwargs}
+            figs = [
+                self._build_shap_dependence(
+                    shap_dict[s], feature=focus_feature, **dep_params
+                )
+                for s in splits
+            ]
+        elif plot_type == "waterfall":
+            if record_index is None:
+                raise ValueError("record_index is required for plot_type='waterfall'")
+            wf_params = {k: kwargs.pop(k) for k in ["max_display"] if k in kwargs}
+            figs = [
+                self._build_shap_waterfall(
+                    shap_dict[s], index=record_index, **wf_params
+                )
+                for s in splits
+            ]
+        elif plot_type == "trend":
+            if not focus_feature:
+                raise ValueError("focus_feature is required for plot_type='trend'")
+            if not self.date_col:
+                raise ValueError("date_col must be set for plot_type='trend'")
+            date_lookup = {s: getattr(self, f"df_{s}")[self.date_col] for s in splits}
+            ts_params = {
+                k: kwargs.pop(k) for k in ["freq", "min_samples"] if k in kwargs
+            }
+            ts_df = self._prepare_shap_time_series(
+                shap_dict,
+                date_lookup=date_lookup,
+                feature_groups=feature_groups,
+                **ts_params,
+            )
+            trend_params = {
+                k: kwargs.pop(k)
+                for k in ["color_palette", "drift_df", "ref_band", "title"]
+                if k in kwargs
+            }
+            fig = self._build_shap_trend_plot(
+                ts_df,
+                feature=focus_feature,
+                splits=splits,
+                reference_split=reference_split,
+                **trend_params,
+            )
+            figs = [fig]
+        else:
+            raise ValueError("invalid plot_type")
+
+        bullets = (
+            self._make_shap_bullets(
+                summary_df,
+                reference_split=reference_split or "train",
+                top_k=max_display,
+                variation_threshold=variation_threshold,
+            )
+            if summary
+            else None
+        )
+
+        if save:
+            self._export_shap_outputs(
+                figs, summary_df, bullets, save=save, save_format=save_format
+            )
+
+        result: go.Figure | list[go.Figure] | dict[str, Any]
+        if summary or return_data or save:
+            result = {"figures": figs}
+            if return_data:
+                result["data"] = summary_df
+            if summary:
+                result["summary"] = bullets or []
+            return result
+
+        return figs[0] if len(figs) == 1 else figs
