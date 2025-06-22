@@ -47,9 +47,7 @@ def test_export_paths_exist(tmp_path):
             "variation_flag": [False],
         }
     )
-    out_dir = bev.export_report(
-        figs=fig, summary_df=df, bullets=["ok"], export_dir=tmp_path
-    )
+    out_dir = bev.export_report(figs=fig, summary_df=df, bullets=["ok"], export_dir=tmp_path)
     assert any(out_dir.glob("*.png"))
     assert (out_dir / "shap_summary.csv").is_file()
     assert (out_dir / "shap_summary.html").is_file()

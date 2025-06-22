@@ -18,9 +18,7 @@ from riskpilot.evaluation.binary_performance_evaluator import (
 
 
 def _split():
-    X, y = make_classification(
-        n_samples=120, n_features=3, n_informative=2, n_redundant=0, random_state=0
-    )
+    X, y = make_classification(n_samples=120, n_features=3, n_informative=2, n_redundant=0, random_state=0)
     df = pd.DataFrame(X, columns=["a", "b", "c"])
     df["target"] = y
     df["id"] = range(len(df))

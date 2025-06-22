@@ -27,7 +27,7 @@ class TemporalIDSampler:
         as amostras serão tiradas.
     mode : {"snapshot", "full"}, default "snapshot"
         • "snapshot": amostra até `snapshot_counts` registros aleatórios
-          **por id** dentro da janela.  
+          **por id** dentro da janela.
         • "full": devolve todo o histórico (todas as datas) do id
           pertencente ao período de cada split.
     snapshot_counts : int, default 1
@@ -40,7 +40,7 @@ class TemporalIDSampler:
 
     Notes
     -----
-    • `force_gap` e `force_continuous` são mutuamente excludentes.  
+    • `force_gap` e `force_continuous` são mutuamente excludentes.
     • Todas as verificações de consistência disparam AssertionError.
     """
 
@@ -61,9 +61,9 @@ class TemporalIDSampler:
     ):
         # ---------------- assertions ---------------- #
         assert mode in {"snapshot", "full"}, "`mode` deve ser 'snapshot' ou 'full'."
-        assert not (force_gap and force_continuous), (
-            "Não é permitido definir force_gap=True e force_continuous=True simultaneamente."
-        )
+        assert not (
+            force_gap and force_continuous
+        ), "Não é permitido definir force_gap=True e force_continuous=True simultaneamente."
         assert date_col in df.columns, f"{date_col!r} não encontrado no DataFrame."
         assert id_col in df.columns, f"{id_col!r} não encontrado no DataFrame."
         assert snapshot_counts >= 1, "snapshot_counts precisa ser >= 1."
@@ -78,16 +78,13 @@ class TemporalIDSampler:
 
         # converte coluna de data se for int-like yyyymm
         if pd.api.types.is_integer_dtype(self.df[date_col]):
-            self.df[date_col] = pd.to_datetime(
-                self.df[date_col].astype(str), format="%Y%m"
-            )
+            self.df[date_col] = pd.to_datetime(self.df[date_col].astype(str), format="%Y%m")
 
         self._window_train = (start_train, end_train)
         self._window_test = (start_test, end_test)
 
         logger.info(
-            "TemporalIDSampler inicializado: mode=%s, snapshot_counts=%s, force_gap=%s, "
-            "force_continuous=%s",
+            "TemporalIDSampler inicializado: mode=%s, snapshot_counts=%s, force_gap=%s, " "force_continuous=%s",
             mode,
             snapshot_counts,
             force_gap,
@@ -107,18 +104,14 @@ class TemporalIDSampler:
         start_dt, end_dt = self._to_dt(start), self._to_dt(end)
         mask = (self.df[self.date_col] >= start_dt) & (self.df[self.date_col] <= end_dt)
         subset = self.df.loc[mask].copy()
-        logger.info(
-            "Seleção janela %s → %s: %d registros", start_dt.date(), end_dt.date(), len(subset)
-        )
+        logger.info("Seleção janela %s → %s: %d registros", start_dt.date(), end_dt.date(), len(subset))
         return subset
-
 
     # --------------------------------------------------------------------- #
     def _sample_snapshot(self, df_win: pd.DataFrame) -> pd.DataFrame:
         n_before = len(df_win)
-        sampled = (
-            df_win.groupby(self.id_col, group_keys=False)
-            .apply(lambda x: x.sample(min(len(x), self.snapshot_counts), random_state=42))
+        sampled = df_win.groupby(self.id_col, group_keys=False).apply(
+            lambda x: x.sample(min(len(x), self.snapshot_counts), random_state=42)
         )
         logger.info(
             "Snapshot de %d → %d linhas (snapshot_counts=%d)",
@@ -146,16 +139,12 @@ class TemporalIDSampler:
 
         if self.force_gap:
             overlap = ids_train & ids_test
-            assert (
-                len(overlap) == 0
-            ), f"force_gap=True, mas {len(overlap)} ids aparecem em train e test."
+            assert len(overlap) == 0, f"force_gap=True, mas {len(overlap)} ids aparecem em train e test."
 
         if self.force_continuous:
             missing_train = ids_train - ids_test
             missing_test = ids_test - ids_train
-            assert (
-                len(missing_train) == 0 and len(missing_test) == 0
-            ), (
+            assert len(missing_train) == 0 and len(missing_test) == 0, (
                 f"force_continuous=True, mas {len(missing_train)} ids do train "
                 f"não aparecem no test e {len(missing_test)} ids do test "
                 f"não aparecem no train."

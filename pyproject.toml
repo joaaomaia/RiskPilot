@@ -50,8 +50,13 @@ model = [
 packages = ["riskpilot"]
 
 [tool.black]
-line-length = 88
-target-version = ['py39']
+line-length = 120
+target-version = ['py311']
+
+[tool.ruff]
+line-length = 120
+select = ['E', 'F', 'I', 'W', 'B', 'C', 'S', 'T']
+ignore = ['E501']  # handled by Black
 
 [tool.pytest.ini_options]
 addopts = "-q"

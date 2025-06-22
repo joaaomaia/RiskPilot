@@ -9,9 +9,7 @@ from sklearn.linear_model import LogisticRegression
 from riskpilot.evaluation import BinaryPerformanceEvaluator
 
 optbinning_available = find_spec("optbinning") is not None
-skip_if_no_optbinning = pytest.mark.skipif(
-    not optbinning_available, reason="optbinning not installed"
-)
+skip_if_no_optbinning = pytest.mark.skipif(not optbinning_available, reason="optbinning not installed")
 
 
 def _split():
@@ -68,6 +66,7 @@ def test_plot_psi_last_period():
 
 from riskpilot.evaluation import BinaryPerformanceEvaluator
 from tests.conftest import shap_available
+
 
 @shap_available
 def test_shap_beeswarm_runs():

@@ -46,18 +46,14 @@ def test_synthetic_generator_deprecated_freq():
 
 
 def test_date_alignment_start():
-    df = pd.DataFrame(
-        {"id": range(3), "date": pd.date_range("2022-01-01", periods=3, freq="MS")}
-    )
+    df = pd.DataFrame({"id": range(3), "date": pd.date_range("2022-01-01", periods=3, freq="MS")})
     gen = LookAhead(id_cols=["id"], date_cols=["date"]).fit(df)
     synth = gen.generate(n_periods=2, freq="M", n_per_vintage=1)
     assert synth["date"].dt.is_month_start.all()
 
 
 def test_date_alignment_end():
-    df = pd.DataFrame(
-        {"id": range(3), "date": pd.date_range("2022-01-31", periods=3, freq="M")}
-    )
+    df = pd.DataFrame({"id": range(3), "date": pd.date_range("2022-01-31", periods=3, freq="M")})
     gen = LookAhead(id_cols=["id"], date_cols=["date"]).fit(df)
     synth = gen.generate(n_periods=2, freq="M", n_per_vintage=1)
     assert synth["date"].dt.is_month_end.all()
@@ -74,9 +70,7 @@ def test_int_yyyymm_roundtrip():
 
 
 def test_no_overlap_with_history():
-    df = pd.DataFrame(
-        {"id": range(3), "date": pd.date_range("2022-01-01", periods=3, freq="MS")}
-    )
+    df = pd.DataFrame({"id": range(3), "date": pd.date_range("2022-01-01", periods=3, freq="MS")})
     gen = LookAhead(id_cols=["id"], date_cols=["date"]).fit(df)
     synth = gen.generate(n_periods=1, freq="M", n_per_vintage=1)
     assert synth["date"].min() > df["date"].max()

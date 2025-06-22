@@ -120,9 +120,7 @@ class MultivariateDriftMonitor:
         self.date_col = date_col
         self.method = method
         self.variance_retained = (
-            variance_retained
-            if variance_retained is not None
-            else (0.65 if method == "autoencoder" else 0.70)
+            variance_retained if variance_retained is not None else (0.65 if method == "autoencoder" else 0.70)
         )
         self.alert_sigma = alert_sigma
         self.hidden_layers = hidden_layers
@@ -139,9 +137,7 @@ class MultivariateDriftMonitor:
 
         self.logger = logger or logging.getLogger(__name__)
         if not self.logger.handlers:
-            logging.basicConfig(
-                level=logging.INFO, format="%(asctime)s %(levelname)s - %(message)s"
-            )
+            logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s - %(message)s")
 
     # ------------------------------------------------------------------
     # Fit
@@ -151,14 +147,10 @@ class MultivariateDriftMonitor:
         Ajusta scaler + modelo no dataset de referência.
         """
         self.logger.info("Fit: iniciando scaler (%s)", self.scaler_strategy)
-        self.scaler_ = DynamicScaler(
-            strategy=self.scaler_strategy, random_state=self.random_state
-        )
+        self.scaler_ = DynamicScaler(strategy=self.scaler_strategy, random_state=self.random_state)
         X_base = df_base[self.features_cols]
         self.scaler_.fit(X_base)
-        X_scaled = self.scaler_.transform(
-            X_base, return_df=False, keep_other_cols=False
-        )
+        X_scaled = self.scaler_.transform(X_base, return_df=False, keep_other_cols=False)
 
         self.logger.info("Fit: treinando modelo (%s)", self.method)
         if self.method == "kpca":
@@ -174,9 +166,7 @@ class MultivariateDriftMonitor:
         else:  # autoencoder
             if keras is None:
                 raise ImportError("TensorFlow/Keras não instalados para Autoencoder.")
-            latent_dim = max(
-                1, int(np.ceil(self.variance_retained * X_scaled.shape[1]))
-            )
+            latent_dim = max(1, int(np.ceil(self.variance_retained * X_scaled.shape[1])))
             input_dim = X_scaled.shape[1]
             hlayers = self._build_hidden_layers(input_dim, latent_dim)
             self.model_ = self._build_autoencoder(input_dim, latent_dim, hlayers)
@@ -212,9 +202,7 @@ class MultivariateDriftMonitor:
     # ------------------------------------------------------------------
     # Score
     # ------------------------------------------------------------------
-    def score(
-        self, df_new: pd.DataFrame, *, update_history: bool = True
-    ) -> pd.DataFrame:
+    def score(self, df_new: pd.DataFrame, *, update_history: bool = True) -> pd.DataFrame:
         """
         Calcula erro de reconstrução em novos dados e retorna DataFrame
         com métricas agregadas por período (mesmo índice que df_new).

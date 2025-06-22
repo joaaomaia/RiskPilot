@@ -10,9 +10,7 @@ from sklearn.linear_model import LogisticRegression
 from riskpilot.evaluation import BinaryPerformanceEvaluator
 
 optbinning_available = find_spec("optbinning") is not None
-skip_if_no_optbinning = pytest.mark.skipif(
-    not optbinning_available, reason="optbinning not installed"
-)
+skip_if_no_optbinning = pytest.mark.skipif(not optbinning_available, reason="optbinning not installed")
 
 
 def _create_split():
@@ -30,9 +28,7 @@ def _create_split():
 @skip_if_no_optbinning
 def test_auto_grouping():
     train, test = _create_split()
-    model = LogisticRegression().fit(
-        train[[f"f{i}" for i in range(5)]], train["target"]
-    )
+    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
 
     evaluator = BinaryPerformanceEvaluator(
         model=model,
@@ -52,9 +48,7 @@ def test_auto_grouping():
 
 def test_radar_plot_returns_figure():
     train, test = _create_split()
-    model = LogisticRegression().fit(
-        train[[f"f{i}" for i in range(5)]], train["target"]
-    )
+    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
 
     evaluator = BinaryPerformanceEvaluator(
         model=model,
@@ -72,9 +66,7 @@ def test_radar_plot_returns_figure():
 
 def test_decile_ks_wrapper():
     train, test = _create_split()
-    model = LogisticRegression().fit(
-        train[[f"f{i}" for i in range(5)]], train["target"]
-    )
+    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
 
     evaluator = BinaryPerformanceEvaluator(
         model=model,
@@ -93,9 +85,7 @@ def test_decile_ks_wrapper():
 
 def test_group_col_required_without_auto():
     train, test = _create_split()
-    model = LogisticRegression().fit(
-        train[[f"f{i}" for i in range(5)]], train["target"]
-    )
+    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
 
     with pytest.raises(ValueError):
         BinaryPerformanceEvaluator(
@@ -112,9 +102,7 @@ def test_group_col_required_without_auto():
 @skip_if_no_optbinning
 def test_event_rate_plot_with_auto_groups():
     train, test = _create_split()
-    model = LogisticRegression().fit(
-        train[[f"f{i}" for i in range(5)]], train["target"]
-    )
+    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
 
     evaluator = BinaryPerformanceEvaluator(
         model=model,
@@ -134,9 +122,7 @@ def test_event_rate_plot_with_auto_groups():
 @skip_if_no_optbinning
 def test_binning_table_method():
     train, test = _create_split()
-    model = LogisticRegression().fit(
-        train[[f"f{i}" for i in range(5)]], train["target"]
-    )
+    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
 
     evaluator = BinaryPerformanceEvaluator(
         model=model,
@@ -153,9 +139,7 @@ def test_binning_table_method():
 
 def test_custom_plot_title():
     train, test = _create_split()
-    model = LogisticRegression().fit(
-        train[[f"f{i}" for i in range(5)]], train["target"]
-    )
+    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
 
     evaluator = BinaryPerformanceEvaluator(
         model=model,
