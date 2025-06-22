@@ -15,9 +15,7 @@ def test_beeswarm_runs():
     df["id"] = range(len(df))
     train = df.iloc[:40]
     test = df.iloc[40:]
-    model = LogisticRegression().fit(
-        train[[f"f{i}" for i in range(4)]], train["target"]
-    )
+    model = LogisticRegression().fit(train[[f"f{i}" for i in range(4)]], train["target"])
 
     bev = BinaryPerformanceEvaluator(
         model=model,

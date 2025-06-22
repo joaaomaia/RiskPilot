@@ -20,9 +20,7 @@ def test_explainer_selection(caplog):
     train = df.iloc[:40].reset_index(drop=True)
     test = df.iloc[40:].reset_index(drop=True)
 
-    rf = RandomForestClassifier(n_estimators=5, random_state=0).fit(
-        train[[f"f{i}" for i in range(4)]], train["target"]
-    )
+    rf = RandomForestClassifier(n_estimators=5, random_state=0).fit(train[[f"f{i}" for i in range(4)]], train["target"])
     bev_rf = BinaryPerformanceEvaluator(
         model=rf,
         df_train=train,

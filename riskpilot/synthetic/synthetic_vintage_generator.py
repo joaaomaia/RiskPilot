@@ -75,15 +75,13 @@ class LookAhead:
                 return offsets.BusinessMonthEnd()
         return frequencies.to_offset(freq)
 
-    def _parse_intlike_dates(
-        self, series: pd.Series
-    ) -> Tuple[pd.DatetimeIndex, Optional[str]]:
+    def _parse_intlike_dates(self, series: pd.Series) -> Tuple[pd.DatetimeIndex, Optional[str]]:
         """Detect and parse integer-like date columns."""
         if series.empty:
             return pd.to_datetime(series), None
-        if (
-            pd.api.types.is_integer_dtype(series) or series.dtype == "object"
-        ) and series.astype(str).str.isdigit().all():
+        if (pd.api.types.is_integer_dtype(series) or series.dtype == "object") and series.astype(
+            str
+        ).str.isdigit().all():
             s = series.astype(str)
             parsed = pd.to_datetime(s, format="%Y%m", errors="coerce")
             if not parsed.isna().any():
@@ -98,11 +96,7 @@ class LookAhead:
     # ------------------------------------------------------------------
     def fit(self, df: pd.DataFrame) -> "LookAhead":
         """Learns marginal distributions and rank correlations from historical data."""
-        self._order = [
-            c
-            for c in df.columns
-            if c not in self.ignore_cols and c not in self.date_cols
-        ]
+        self._order = [c for c in df.columns if c not in self.ignore_cols and c not in self.date_cols]
 
         for col in self._date_cols:
             raw = df[col].dropna()
@@ -128,9 +122,7 @@ class LookAhead:
                 if max(start_p, end_p) < 0.6:
                     self._date_month_alignment[col] = self.unclear_date_strategy
                 else:
-                    self._date_month_alignment[col] = (
-                        "start" if start_p >= end_p else "end"
-                    )
+                    self._date_month_alignment[col] = "start" if start_p >= end_p else "end"
         if self._date_cols:
             self._has_time_component = self._date_has_time[self._date_cols[0]]
             self._max_date = self._max_dates.get(self._date_cols[0], pd.Timestamp.min)
@@ -234,9 +226,7 @@ class LookAhead:
                 start_vintage = start_vintage.normalize()
             if skip_train_overlap:
                 candidate = start_vintage
-                align = self._date_month_alignment.get(
-                    self._date_cols[0], self.unclear_date_strategy
-                )
+                align = self._date_month_alignment.get(self._date_cols[0], self.unclear_date_strategy)
                 if isinstance(
                     offset,
                     (
@@ -307,9 +297,7 @@ class LookAhead:
             normalize=not self._has_time_component,
         )
         if len(expected) != len(vint_dates):
-            raise ValueError(
-                "Generated dates are not continuous with the given frequency"
-            )
+            raise ValueError("Generated dates are not continuous with the given frequency")
 
         for vint in vint_dates:
             n_rows = n_per_vintage or self.random_state.choice([500, 1000, 2000])
@@ -415,14 +403,12 @@ class LookAhead:
         for col, fmt in self._date_int_format.items():
             if col in df_synth.columns:
                 if fmt == "yyyymm":
-                    df_synth[col] = (
-                        df_synth[col].dt.year * 100 + df_synth[col].dt.month
-                    ).astype(self._date_int_dtype[col])
+                    df_synth[col] = (df_synth[col].dt.year * 100 + df_synth[col].dt.month).astype(
+                        self._date_int_dtype[col]
+                    )
                 elif fmt == "yyyymmdd":
                     df_synth[col] = (
-                        df_synth[col].dt.year * 10000
-                        + df_synth[col].dt.month * 100
-                        + df_synth[col].dt.day
+                        df_synth[col].dt.year * 10000 + df_synth[col].dt.month * 100 + df_synth[col].dt.day
                     ).astype(self._date_int_dtype[col])
 
         return df_synth
@@ -430,9 +416,7 @@ class LookAhead:
     # ------------------------------------------------------------------
     # Sampling
     # ------------------------------------------------------------------
-    def _sample_marginal(
-        self, col: str, meta: _VarMeta, n: int, scenario: str
-    ) -> np.ndarray:
+    def _sample_marginal(self, col: str, meta: _VarMeta, n: int, scenario: str) -> np.ndarray:
         cust = self.custom_noise.get(col)
         if cust is not None:
             func: Callable = cust["func"]
@@ -499,9 +483,7 @@ class LookAhead:
         for j, col in enumerate(cols):
             meta = self._meta[col]
             if meta.dtype == "cont":
-                df_new[col] = np.interp(
-                    u[:, j], np.linspace(0, 1, len(meta.quantiles)), meta.quantiles
-                )
+                df_new[col] = np.interp(u[:, j], np.linspace(0, 1, len(meta.quantiles)), meta.quantiles)
             else:  # disc
                 bins = np.cumsum(meta.categories) / meta.categories.sum()
                 df_new[col] = np.searchsorted(bins, u[:, j])
@@ -532,9 +514,7 @@ class LookAhead:
                 uniq = sorted(tm.keys())
                 mapping = {}
                 for k in uniq:
-                    mapping[k] = np.random.choice(
-                        uniq, p=[tm[k][u] for u in uniq], size=len(df_synth)
-                    )
+                    mapping[k] = np.random.choice(uniq, p=[tm[k][u] for u in uniq], size=len(df_synth))
                 df_synth[col] = mapping
         return df_synth
 

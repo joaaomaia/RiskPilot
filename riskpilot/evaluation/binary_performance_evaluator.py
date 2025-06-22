@@ -68,10 +68,7 @@ try:
     from optbinning import OptimalBinning
 except ImportError:  # pragma: no cover - optional dependency
     OptimalBinning = None  # type: ignore[assignment]
-    logging.warning(
-        "Optional dependency 'optbinning' is missing. "
-        "Install with `pip install riskpilot[binning]`."
-    )
+    logging.warning("Optional dependency 'optbinning' is missing. " "Install with `pip install riskpilot[binning]`.")
 from sklearn.linear_model import (
     LogisticRegression,
     LinearRegression,
@@ -93,9 +90,7 @@ try:
     import shap
 except ImportError:  # pragma: no cover - optional dependency
     shap = None  # type: ignore[assignment]
-    logging.warning(
-        "Optional dependency 'shap' is missing. Install with `pip install riskpilot[viz]`."
-    )
+    logging.warning("Optional dependency 'shap' is missing. Install with `pip install riskpilot[viz]`.")
 
 try:  # pragma: no cover - optional dependency
     from xgboost import XGBModel
@@ -141,18 +136,14 @@ def _style_plotly(fig: go.Figure, *, title: str | None = None) -> go.Figure:
 # --- Helper utilities ---
 
 
-def _compute_psi(
-    counts_ref: np.ndarray, counts_cmp: np.ndarray, eps: float = 1e-6
-) -> float:
+def _compute_psi(counts_ref: np.ndarray, counts_cmp: np.ndarray, eps: float = 1e-6) -> float:
     """Compute PSI using histogram bin counts."""
     p_ref = (counts_ref + eps) / (counts_ref.sum() + eps * len(counts_ref))
     p_cmp = (counts_cmp + eps) / (counts_cmp.sum() + eps * len(counts_cmp))
     return _psi_single(p_ref, p_cmp)
 
 
-def _filter_by_vintages(
-    df: pd.DataFrame, date_col: str, vintages: list
-) -> pd.DataFrame:
+def _filter_by_vintages(df: pd.DataFrame, date_col: str, vintages: list) -> pd.DataFrame:
     """Return rows matching the specified vintages.
 
     Vintages may be provided as ``YYYYMM`` integers/strings or any format
@@ -167,9 +158,7 @@ def _filter_by_vintages(
     else:
         parsed = pd.to_datetime(vintages_series, errors="coerce")
         if parsed.isna().any():
-            parsed = parsed.fillna(
-                pd.to_datetime(vintages_series, format="%Y%m", errors="coerce")
-            )
+            parsed = parsed.fillna(pd.to_datetime(vintages_series, format="%Y%m", errors="coerce"))
 
     vintages_period = parsed.dropna().dt.to_period("M")
     periods = pd.to_datetime(df[date_col]).dt.to_period("M")
@@ -379,9 +368,7 @@ class BinaryPerformanceEvaluator:
         records: list[dict] = []
         for split_name, df in splits.items():
             if by_date_col and date_col in df.columns:
-                for period, df_period in df.sort_values(date_col).groupby(
-                    date_col, sort=True
-                ):
+                for period, df_period in df.sort_values(date_col).groupby(date_col, sort=True):
                     records.append(_row(df_period, split_name, period))
             else:
                 records.append(_row(df, split_name))
@@ -565,12 +552,7 @@ class BinaryPerformanceEvaluator:
             cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
             cm_pct = cm / cm.sum()
             heat = cm_pct if normalize else cm
-            annot = np.array(
-                [
-                    [f"{cm[i, j]}\n{cm_pct[i, j]:.1%}" for j in range(2)]
-                    for i in range(2)
-                ]
-            )
+            annot = np.array([[f"{cm[i, j]}\n{cm_pct[i, j]:.1%}" for j in range(2)] for i in range(2)])
 
             fig, ax = plt.subplots(figsize=figsize)
             sns.heatmap(
@@ -629,20 +611,13 @@ class BinaryPerformanceEvaluator:
         for ax, split in zip(axes, splits):
             df_split = available[split]
             y_true_s = df_split[self.target_col].values
-            y_proba_s = self.model.predict_proba(df_split[self.predictor_cols])[
-                :, pos_idx
-            ]
+            y_proba_s = self.model.predict_proba(df_split[self.predictor_cols])[:, pos_idx]
             y_pred_s = (y_proba_s >= float(threshold)).astype(int)
 
             cm = confusion_matrix(y_true_s, y_pred_s, labels=[0, 1])
             cm_pct = cm / cm.sum()
             heat = cm_pct if normalize else cm
-            annot = np.array(
-                [
-                    [f"{cm[i, j]}\n{cm_pct[i, j]:.1%}" for j in range(2)]
-                    for i in range(2)
-                ]
-            )
+            annot = np.array([[f"{cm[i, j]}\n{cm_pct[i, j]:.1%}" for j in range(2)] for i in range(2)])
 
             sns.heatmap(
                 heat,
@@ -726,9 +701,7 @@ class BinaryPerformanceEvaluator:
             y_true = df[self.target_col].values
             y_proba = self.model.predict_proba(df[self.predictor_cols])[:, pos_idx]
 
-            prob_true, prob_pred = calibration_curve(
-                y_true, y_proba, n_bins=n_bins, strategy="uniform"
-            )
+            prob_true, prob_pred = calibration_curve(y_true, y_proba, n_bins=n_bins, strategy="uniform")
             brier = brier_score_loss(y_true, y_proba)
             infos.append((split, prob_pred, prob_true, brier))
 
@@ -738,9 +711,7 @@ class BinaryPerformanceEvaluator:
 
         for c, (split, prob_pred, prob_true, brier) in enumerate(infos, 1):
             fig.add_trace(
-                go.Scatter(
-                    x=prob_pred, y=prob_true, mode="lines+markers", name="Modelo"
-                ),
+                go.Scatter(x=prob_pred, y=prob_true, mode="lines+markers", name="Modelo"),
                 row=1,
                 col=c,
             )
@@ -845,19 +816,11 @@ class BinaryPerformanceEvaluator:
             raise ValueError(f"Splits inválidos: {invalid}")
 
         # ----------- paleta + ordem de GH ----------------
-        df_full = pd.concat(
-            [available[s].assign(Split=s.capitalize()) for s in splits], axis=0
-        )
+        df_full = pd.concat([available[s].assign(Split=s.capitalize()) for s in splits], axis=0)
         df_full[self.date_col] = pd.to_datetime(df_full[self.date_col])
 
-        group_col = next(
-            c for c in [self.group_col, self.group_col_] if c and c in df_full.columns
-        )
-        br_order = (
-            df_full.groupby(group_col)[self.target_col]
-            .mean()
-            .sort_values(ascending=False)
-        )
+        group_col = next(c for c in [self.group_col, self.group_col_] if c and c in df_full.columns)
+        br_order = df_full.groupby(group_col)[self.target_col].mean().sort_values(ascending=False)
         gh_order = list(br_order.index)  # pior → melhor
         gh_label = {g: f"GH{i+1}" for i, g in enumerate(gh_order)}
 
@@ -1063,9 +1026,7 @@ class BinaryPerformanceEvaluator:
 
         # se o usuário pediu exatamente uma variável proibida, avise
         if feature in forbidden:
-            raise ValueError(
-                f"'{feature}' é coluna interna (score/label) e não deve ser usada para PSI."
-            )
+            raise ValueError(f"'{feature}' é coluna interna (score/label) e não deve ser usada para PSI.")
         # --------------------------------------------
 
         # -------- global_edges (referência train) ------
@@ -1076,12 +1037,7 @@ class BinaryPerformanceEvaluator:
                 global_edges[var] = edges
 
         for split_name, df in splits:
-            periods = (
-                pd.to_datetime(df[self.date_col])
-                .dt.to_period("M")
-                .sort_values()
-                .unique()
-            )
+            periods = pd.to_datetime(df[self.date_col]).dt.to_period("M").sort_values().unique()
             for var in variables:
                 edges = global_edges.get(var)
                 if edges is None:
@@ -1091,9 +1047,7 @@ class BinaryPerformanceEvaluator:
                 p_ref = counts_ref / counts_ref.sum()
 
                 for period in periods:
-                    subset = df[
-                        pd.to_datetime(df[self.date_col]).dt.to_period("M") == period
-                    ]
+                    subset = df[pd.to_datetime(df[self.date_col]).dt.to_period("M") == period]
                     if len(subset) < min_obs:
                         continue
                     ser = pd.to_numeric(subset[var], errors="coerce").dropna()
@@ -1106,9 +1060,7 @@ class BinaryPerformanceEvaluator:
                     if ser.max() > edges_adj[-1]:
                         edges_adj[-1] = ser.max()
 
-                    counts_test = (
-                        np.histogram(ser, bins=edges_adj)[0].astype(float) + eps
-                    )
+                    counts_test = np.histogram(ser, bins=edges_adj)[0].astype(float) + eps
                     p_test = counts_test / counts_test.sum()
                     psi_val = _psi_single(p_ref, p_test)
 
@@ -1129,12 +1081,7 @@ class BinaryPerformanceEvaluator:
 
         # -------- smart_view --------------------------
         if smart_view and feature is None:
-            keep_vars = (
-                psi_df.groupby("Variable")["PSI"]
-                .max()
-                .loc[lambda s: s >= psi_threshold]
-                .index
-            )
+            keep_vars = psi_df.groupby("Variable")["PSI"].max().loc[lambda s: s >= psi_threshold].index
             psi_df = psi_df[psi_df["Variable"].isin(keep_vars)]
 
         # ------------- retorno: 1 figura por variável --------------
@@ -1233,12 +1180,12 @@ class BinaryPerformanceEvaluator:
         kde: bool = True,
         bars: bool = True,
         kde_fill_alpha: float | None = None,  # 0‒1 → área sombreada
-        alpha: float = 0.40,  # opacidade das barras
+        alpha: float = 0.40,  # opacidade das barras  # TODO(use DEFAULT_ALPHA)
         log_scale: bool = False,
         # Styling
         figsize: tuple[int, int] = (6, 4),
-        cmap_reference: str = "#b4b5b6",  # cinza
-        cmap_compare: str = "#f88825",  # laranja
+        cmap_reference: str = "#b4b5b6",  # cinza  # TODO(use COLOR_PRIMARY)
+        cmap_compare: str = "#f88825",  # laranja  # TODO(use COLOR_PRIMARY)
         show_metric: bool = True,  # ⬅️  nova anotação discreta
         show_legend: bool = True,  # ⬅️  liga/desliga legenda
         # Retro‑compatibilidade
@@ -1286,10 +1233,7 @@ class BinaryPerformanceEvaluator:
         missing = [f for f in features if f not in self.df_train.columns]
         if missing:
             raise ValueError(f"Feature(s) not found: {missing}")
-        if self.date_col is None and (
-            (reference and any(reference.values()))
-            or (compare and any(compare.values()))
-        ):
+        if self.date_col is None and ((reference and any(reference.values())) or (compare and any(compare.values()))):
             raise ValueError("`date_col` is required for vintage filtering.")
 
         # ------------------------------------------------------------------ #
@@ -1304,10 +1248,7 @@ class BinaryPerformanceEvaluator:
                 return {default_split: None}
             if isinstance(mapping, (list, tuple)):
                 return {default_split: list(mapping)}
-            return {
-                k.lower(): (list(v) if v is not None else None)
-                for k, v in mapping.items()
-            }
+            return {k.lower(): (list(v) if v is not None else None) for k, v in mapping.items()}
 
         reference = _prep(reference, "train")
         default_cmp = "test" if "test" in all_splits else "val"
@@ -1322,11 +1263,7 @@ class BinaryPerformanceEvaluator:
                 if vint:
                     df = _filter_by_vintages(df, self.date_col, vint)
                 frames.append(df)
-            return (
-                pd.concat(frames, axis=0, ignore_index=True)
-                if frames
-                else pd.DataFrame()
-            )
+            return pd.concat(frames, axis=0, ignore_index=True) if frames else pd.DataFrame()
 
         df_ref, df_cmp = _collect(reference), _collect(compare)
         if df_ref.empty or df_cmp.empty:
@@ -1419,12 +1356,8 @@ class BinaryPerformanceEvaluator:
                     hist_cmp = counts_cmp * scale
             else:
                 widths = np.diff(edges)
-                p_ref = (
-                    counts_ref / counts_ref.sum() if counts_ref.sum() else counts_ref
-                )
-                p_cmp = (
-                    counts_cmp / counts_cmp.sum() if counts_cmp.sum() else counts_cmp
-                )
+                p_ref = counts_ref / counts_ref.sum() if counts_ref.sum() else counts_ref
+                p_cmp = counts_cmp / counts_cmp.sum() if counts_cmp.sum() else counts_cmp
                 if stat == "density":
                     hist_ref, hist_cmp = p_ref / widths, p_cmp / widths
                 else:
@@ -1523,9 +1456,7 @@ class BinaryPerformanceEvaluator:
 
             # ----------------------- Labels --------------------
             if backend == "plotly":
-                fig.update_xaxes(
-                    title=feat, type="log" if log_scale else "linear", row=row, col=col
-                )
+                fig.update_xaxes(title=feat, type="log" if log_scale else "linear", row=row, col=col)
                 fig.update_yaxes(title=stat.capitalize(), row=row, col=col)
             else:
                 ax.set_title(feat)
@@ -1534,9 +1465,7 @@ class BinaryPerformanceEvaluator:
                     ax.set_xscale("log")
 
             # annotation – replaces old table
-            _annotate_metric(
-                ax if backend == "matplotlib" else fig, row, col, metric_str
-            )
+            _annotate_metric(ax if backend == "matplotlib" else fig, row, col, metric_str)
 
             # legend
             if backend == "matplotlib" and show_legend:
@@ -1593,13 +1522,11 @@ class BinaryPerformanceEvaluator:
 
         # ------- prepara splits disponíveis --------
         dfs = [
-            ("Train", self.df_train, "#7f7f7f"),
-            ("Test", self.df_test, "#1f77b4"),
+            ("Train", self.df_train, "#7f7f7f"),  # TODO(use COLOR_PRIMARY)
+            ("Test", self.df_test, "#1f77b4"),  # TODO(use COLOR_PRIMARY)
             *(
-                [("Val", self.df_val, "#d62728")]
-                if getattr(self, "df_val", None) is not None
-                else []
-            ),
+                [("Val", self.df_val, "#d62728")] if getattr(self, "df_val", None) is not None else []
+            ),  # TODO(use COLOR_PRIMARY)
         ]
 
         ks_records = []
@@ -1608,9 +1535,7 @@ class BinaryPerformanceEvaluator:
             df["Safra"] = pd.to_datetime(df[self.date_col]).dt.to_period("M")
             for safra, grp in df.groupby("Safra", sort=True):
                 y_true = grp[self.target_col].values
-                y_pred = self.model.predict_proba(grp[self.predictor_cols])[
-                    :, self._pos_class_idx
-                ]
+                y_pred = self.model.predict_proba(grp[self.predictor_cols])[:, self._pos_class_idx]
                 ks = ks_stat(y_true, y_pred)
                 ks_records.append(
                     {
@@ -1630,9 +1555,9 @@ class BinaryPerformanceEvaluator:
         # ------- plotly --------
         fig = go.Figure()
         for split, color in [
-            ("Train", "#7f7f7f"),
-            ("Test", "#d62728"),
-            ("Val", "#1f77b4"),
+            ("Train", "#7f7f7f"),  # TODO(use COLOR_PRIMARY)
+            ("Test", "#d62728"),  # TODO(use COLOR_PRIMARY)
+            ("Val", "#1f77b4"),  # TODO(use COLOR_PRIMARY)
         ]:
             grp = ks_df[ks_df["Split"] == split]
             if grp.empty:
@@ -1646,11 +1571,7 @@ class BinaryPerformanceEvaluator:
                     line=dict(color=color),
                     marker=dict(color=color),
                     customdata=np.stack([grp["Safra_fmt"], grp["Volume"]], axis=-1),
-                    hovertemplate=(
-                        "Safra: %{customdata[0]}<br>"
-                        "KS: %{y:.4f}<br>"
-                        "Volume: %{customdata[1]:,}"
-                    ),
+                    hovertemplate=("Safra: %{customdata[0]}<br>" "KS: %{y:.4f}<br>" "Volume: %{customdata[1]:,}"),
                 )
             )
 
@@ -1785,11 +1706,7 @@ class BinaryPerformanceEvaluator:
             raise ValueError("`date_col` é necessário para animation=True.")
 
         # ------------ mapeia GH ↔ número ordenado ----------
-        br = (
-            self.data_.groupby(self.group_col_)[self.target_col]
-            .mean()
-            .sort_values(ascending=False)
-        )
+        br = self.data_.groupby(self.group_col_)[self.target_col].mean().sort_values(ascending=False)
         gh_order = list(br.index)  # pior → melhor
         gh_to_num = {g: i + 1 for i, g in enumerate(gh_order)}
         num_to_gh = {v: k for k, v in gh_to_num.items()}
@@ -1838,12 +1755,7 @@ class BinaryPerformanceEvaluator:
         #                 animação mensal
         # ==================================================
         if animation:
-            periods = (
-                pd.to_datetime(self.data_[self.date_col])
-                .dt.to_period("M")
-                .sort_values()
-                .unique()
-            )
+            periods = pd.to_datetime(self.data_[self.date_col]).dt.to_period("M").sort_values().unique()
             if not len(periods):
                 raise ValueError("Nenhum período para animação.")
 
@@ -1861,18 +1773,11 @@ class BinaryPerformanceEvaluator:
                     theta = feats + [feats[0]]
                     for split in splits:
                         df_s = all_splits[split]
-                        mask = (
-                            pd.to_datetime(df_s[self.date_col]).dt.to_period("M") == per
-                        )
+                        mask = pd.to_datetime(df_s[self.date_col]).dt.to_period("M") == per
                         df_s = df_s[mask]
                         if df_s.empty or g_int not in df_s[self.group_col_].values:
                             continue
-                        mean_row = (
-                            _scale(df_s)
-                            .groupby(df_s[self.group_col_])[feats]
-                            .mean()
-                            .loc[g_int]
-                        )
+                        mean_row = _scale(df_s).groupby(df_s[self.group_col_])[feats].mean().loc[g_int]
                         r_vals = mean_row.tolist() + [mean_row[feats[0]]]
                         traces.append(
                             go.Scatterpolar(
@@ -1894,21 +1799,13 @@ class BinaryPerformanceEvaluator:
                         )
                 return traces
 
-            frames = [
-                go.Frame(data=_frame(per), name=per.strftime("%Y-%m"))
-                for per in periods
-            ]
+            frames = [go.Frame(data=_frame(per), name=per.strftime("%Y-%m")) for per in periods]
             fig.add_traces(frames[0].data)
             fig.frames = frames
 
             # fixa escala
             fig.update_layout(
-                **{
-                    f"polar{i}": dict(
-                        radialaxis=dict(visible=False, range=[r_min, r_max])
-                    )
-                    for i in range(1, n_gh + 1)
-                },
+                **{f"polar{i}": dict(radialaxis=dict(visible=False, range=[r_min, r_max])) for i in range(1, n_gh + 1)},
                 template="plotly_white",
                 title=title or "Evolução mensal",
                 height=800,
@@ -1950,16 +1847,10 @@ class BinaryPerformanceEvaluator:
         # ==================================================
         #              estáticos (combined / sep)
         # ==================================================
-        mean_split = {
-            s: _scale(df).groupby(df[self.group_col_])[feats].mean()
-            for s, df in all_splits.items()
-        }
+        mean_split = {s: _scale(df).groupby(df[self.group_col_])[feats].mean() for s, df in all_splits.items()}
 
         def _polar_cfg(n):
-            return {
-                f"polar{i}": dict(radialaxis=dict(visible=False, range=[r_min, r_max]))
-                for i in range(1, n + 1)
-            }
+            return {f"polar{i}": dict(radialaxis=dict(visible=False, range=[r_min, r_max])) for i in range(1, n + 1)}
 
         # -------- combinado ----------
         if not separated:
@@ -1975,9 +1866,7 @@ class BinaryPerformanceEvaluator:
                     if g_int not in mean_split[split].index:
                         continue
                     theta = feats + [feats[0]]
-                    r_vals = mean_split[split].loc[g_int].tolist() + [
-                        mean_split[split].loc[g_int, feats[0]]
-                    ]
+                    r_vals = mean_split[split].loc[g_int].tolist() + [mean_split[split].loc[g_int, feats[0]]]
                     fig.add_trace(
                         go.Scatterpolar(
                             r=r_vals,
@@ -1989,8 +1878,7 @@ class BinaryPerformanceEvaluator:
                             fillcolor=_rgba(self.group_palette_[g_int], 0.25),
                             customdata=[_vol(all_splits[split], g_int)] * len(r_vals),
                             hovertemplate=(
-                                f"GH{g_num}<br>Split: {split.capitalize()}<br>"
-                                "Volume: %{customdata:,}<extra></extra>"
+                                f"GH{g_num}<br>Split: {split.capitalize()}<br>" "Volume: %{customdata:,}<extra></extra>"
                             ),
                         ),
                         row=1,
@@ -2022,9 +1910,7 @@ class BinaryPerformanceEvaluator:
                 if g_int not in mean_split[split].index:
                     continue
                 theta = feats + [feats[0]]
-                r_vals = mean_split[split].loc[g_int].tolist() + [
-                    mean_split[split].loc[g_int, feats[0]]
-                ]
+                r_vals = mean_split[split].loc[g_int].tolist() + [mean_split[split].loc[g_int, feats[0]]]
                 fig.add_trace(
                     go.Scatterpolar(
                         r=r_vals,
@@ -2035,10 +1921,7 @@ class BinaryPerformanceEvaluator:
                         fill="toself",
                         fillcolor=_rgba(self.group_palette_[g_int], 0.25),
                         customdata=[_vol(all_splits[split], g_int)] * len(r_vals),
-                        hovertemplate=(
-                            f"Split: {split.capitalize()}<br>"
-                            "Volume: %{customdata:,}<extra></extra>"
-                        ),
+                        hovertemplate=(f"Split: {split.capitalize()}<br>" "Volume: %{customdata:,}<extra></extra>"),
                         showlegend=False,
                     ),
                     row=1,
@@ -2300,9 +2183,7 @@ class BinaryPerformanceEvaluator:
         cmap: str = "Blues",
         save: bool = False,
         raise_on_empty: bool = True,
-    ) -> (
-        tuple[list[go.Figure] | go.Figure, dict[str, Any]] | tuple[None, dict[str, Any]]
-    ):
+    ) -> tuple[list[go.Figure] | go.Figure, dict[str, Any]] | tuple[None, dict[str, Any]]:
         """Visualize contract migration between GHs using Sankey diagrams.
 
         Parameters
@@ -2347,11 +2228,7 @@ class BinaryPerformanceEvaluator:
             raise ValueError("date_col contains NaT values – check parsing.")
 
         gh_col = next(
-            (
-                c
-                for c in [self.group_col, self.group_col_]
-                if c and c in self.data_.columns
-            ),
+            (c for c in [self.group_col, self.group_col_] if c and c in self.data_.columns),
             None,
         )
         if gh_col is None:
@@ -2388,16 +2265,12 @@ class BinaryPerformanceEvaluator:
                 flows.append(tmp)
             if flows:
                 hist = pd.concat(flows, ignore_index=True)
-                return hist.groupby([f"{gh_col}_start", f"{gh_col}_end"])[
-                    "value"
-                ].mean()
+                return hist.groupby([f"{gh_col}_start", f"{gh_col}_end"])["value"].mean()
             return pd.Series(dtype=float)
 
         hist_means = _historical_means()
 
-        def _one_sankey(
-            p1: pd.Period, p2: pd.Period
-        ) -> tuple[go.Figure | None, dict[str, Any]]:
+        def _one_sankey(p1: pd.Period, p2: pd.Period) -> tuple[go.Figure | None, dict[str, Any]]:
             df_start = df_all[df_all[self.date_col] == p1].copy()
             df_end = df_all[df_all[self.date_col] == p2][[id_col, gh_col]].copy()
 
@@ -2416,9 +2289,7 @@ class BinaryPerformanceEvaluator:
                 df_start.merge(df_end, on=id_col, suffixes=("_start", "_end"))
                 .groupby([f"{gh_col}_start", f"{gh_col}_end"], as_index=False)
                 .agg(value=(money_col, "sum") if money_col else (id_col, "count"))
-                .rename(
-                    columns={f"{gh_col}_start": "gh_start", f"{gh_col}_end": "gh_end"}
-                )
+                .rename(columns={f"{gh_col}_start": "gh_start", f"{gh_col}_end": "gh_end"})
             )
 
             logger.info("After merge: %d flows", len(cross))
@@ -2434,9 +2305,7 @@ class BinaryPerformanceEvaluator:
                 return None, {}
 
             if normalize and not cross.empty:
-                cross["value"] = cross["value"] / cross.groupby("gh_start")[
-                    "value"
-                ].transform("sum")
+                cross["value"] = cross["value"] / cross.groupby("gh_start")["value"].transform("sum")
 
             if top_n is not None and top_n < len(cross):
                 cross = cross.sort_values("value", ascending=False)
@@ -2457,11 +2326,7 @@ class BinaryPerformanceEvaluator:
                         ignore_index=True,
                     )
 
-            nodes = (
-                pd.Index(cross["gh_start"].tolist() + cross["gh_end"].tolist())
-                .unique()
-                .tolist()
-            )
+            nodes = pd.Index(cross["gh_start"].tolist() + cross["gh_end"].tolist()).unique().tolist()
             idx_map = {n: i for i, n in enumerate(nodes)}
             labels = [gh_to_label.get(n, "Other") for n in nodes]
             colors = [self.group_palette_.get(n, "lightgrey") for n in nodes]
@@ -2482,9 +2347,7 @@ class BinaryPerformanceEvaluator:
                 if period_to_period
                 else f"GH Migration – {start_p.strftime('%Y-%m')} ⟶ {end_p.strftime('%Y-%m')} (net)"
             )
-            fig.update_layout(
-                template="plotly_white", title=title, height=800, width=1200
-            )
+            fig.update_layout(template="plotly_white", title=title, height=800, width=1200)
 
             if save and self.save_dir:
                 fname = f"sankey_{p1.strftime('%Y%m')}_{p2.strftime('%Y%m')}.png"
@@ -2496,15 +2359,9 @@ class BinaryPerformanceEvaluator:
 
             metrics = {
                 "new_entries": (
-                    gh_to_label.get(new_entries.value_counts().idxmax(), None)
-                    if not new_entries.empty
-                    else None
+                    gh_to_label.get(new_entries.value_counts().idxmax(), None) if not new_entries.empty else None
                 ),
-                "exits": (
-                    gh_to_label.get(exits.value_counts().idxmax(), None)
-                    if not exits.empty
-                    else None
-                ),
+                "exits": (gh_to_label.get(exits.value_counts().idxmax(), None) if not exits.empty else None),
                 "common_flow": None,
                 "outlier_flow": None,
             }
@@ -2556,9 +2413,7 @@ class BinaryPerformanceEvaluator:
                 with open(model_path, "rb") as f:
                     return pickle.load(f)
             else:
-                raise ValueError(
-                    f"Unsupported model file extension: {model_path.suffix}"
-                )
+                raise ValueError(f"Unsupported model file extension: {model_path.suffix}")
         else:
             # assume object is already a fitted estimator
             if not hasattr(model, "predict_proba"):
@@ -2585,9 +2440,7 @@ class BinaryPerformanceEvaluator:
 
         if self.homogeneous_group is None:
             if not self.group_col:
-                raise ValueError(
-                    "`group_col` must be provided when homogeneous_group is None."
-                )
+                raise ValueError("`group_col` must be provided when homogeneous_group is None.")
             for name, df in [
                 ("df_train", self.df_train),
                 ("df_test", self.df_test),
@@ -2610,9 +2463,7 @@ class BinaryPerformanceEvaluator:
             col = df[self.date_col]
             if pd.api.types.is_integer_dtype(col) or pd.api.types.is_float_dtype(col):
                 try:
-                    df[self.date_col] = pd.to_datetime(
-                        col.astype(int).astype(str), format="%Y%m"
-                    )
+                    df[self.date_col] = pd.to_datetime(col.astype(int).astype(str), format="%Y%m")
                     continue
                 except Exception:
                     pass
@@ -2665,9 +2516,7 @@ class BinaryPerformanceEvaluator:
         if self.model_feature_names:
             missing = [c for c in self.model_feature_names if c not in cols]
             if missing:
-                raise ValueError(
-                    f"Model expects columns not present in provided data: {missing}"
-                )
+                raise ValueError(f"Model expects columns not present in provided data: {missing}")
             return [c for c in self.model_feature_names if c in cols]
 
         if self.model_n_features is not None and len(cols) != self.model_n_features:
@@ -2694,13 +2543,8 @@ class BinaryPerformanceEvaluator:
             ordered = [c for c in self.model_feature_names if c in self.predictor_cols]
             if ordered != self.predictor_cols:
                 self.predictor_cols = ordered
-        elif (
-            self.model_n_features is not None
-            and len(self.predictor_cols) != self.model_n_features
-        ):
-            raise ValueError(
-                f"Model expects {self.model_n_features} features, got {len(self.predictor_cols)}"
-            )
+        elif self.model_n_features is not None and len(self.predictor_cols) != self.model_n_features:
+            raise ValueError(f"Model expects {self.model_n_features} features, got {len(self.predictor_cols)}")
 
     def _score_datasets(self) -> None:
         """Add predicted probabilities and labels to each split."""
@@ -2709,19 +2553,13 @@ class BinaryPerformanceEvaluator:
             dfs.append(("val", self.df_val))
 
         for name, df in dfs:
-            proba = (
-                1
-                - self.model.predict_proba(df[self.predictor_cols])[
-                    :, self._pos_class_idx
-                ]
-            )
+            proba = 1 - self.model.predict_proba(df[self.predictor_cols])[:, self._pos_class_idx]
             df[self.score_col_] = proba
             df[self.label_col_] = (proba >= self.threshold).astype(int)
             df["Split"] = name.capitalize()
 
         self.data_ = pd.concat(
-            [self.df_train, self.df_test]
-            + ([self.df_val] if self.df_val is not None else []),
+            [self.df_train, self.df_test] + ([self.df_val] if self.df_val is not None else []),
             axis=0,
             ignore_index=True,
         )
@@ -2752,9 +2590,7 @@ class BinaryPerformanceEvaluator:
                 min_bin_size=0.05,
                 monotonic_trend="descending",
             )
-            optb.fit(
-                self.df_train[self.score_col_] * 1000, self.df_train[self.target_col]
-            )
+            optb.fit(self.df_train[self.score_col_] * 1000, self.df_train[self.target_col])
             self.binning_table_ = optb.binning_table.build()
 
             for name, df in [
@@ -2807,8 +2643,7 @@ class BinaryPerformanceEvaluator:
             self.binning_table_ = None
 
         self.data_ = pd.concat(
-            [self.df_train, self.df_test]
-            + ([self.df_val] if self.df_val is not None else []),
+            [self.df_train, self.df_test] + ([self.df_val] if self.df_val is not None else []),
             axis=0,
             ignore_index=True,
         )
@@ -2827,8 +2662,7 @@ class BinaryPerformanceEvaluator:
         rates = self.data_.groupby(group_col)[self.target_col].mean().sort_values()
         palette = sns.diverging_palette(240, 10, n=len(rates))
         self.group_palette_ = {
-            grp: f"rgb({int(r*255)},{int(g*255)},{int(b*255)})"
-            for grp, (r, g, b) in zip(rates.index, palette)
+            grp: f"rgb({int(r*255)},{int(g*255)},{int(b*255)})" for grp, (r, g, b) in zip(rates.index, palette)
         }
 
     def _psi_variables(self) -> List[str]:
@@ -2837,9 +2671,7 @@ class BinaryPerformanceEvaluator:
         if self.date_col:
             exclude.add(self.date_col)
         vars_ = [c for c in self.df_train.columns if c not in exclude]
-        numeric_vars = [
-            v for v in vars_ if pd.api.types.is_numeric_dtype(self.df_train[v])
-        ]
+        numeric_vars = [v for v in vars_ if pd.api.types.is_numeric_dtype(self.df_train[v])]
         return numeric_vars
 
     def _infer_splits(self, splits: Sequence[str] | None) -> list[str]:
@@ -2892,8 +2724,7 @@ class BinaryPerformanceEvaluator:
 
         if shap is None:  # pragma: no cover - optional dependency guard
             raise ImportError(
-                "SHAP visualisations need the optional dependency 'shap'. "
-                "Install with `pip install riskpilot[viz]`."
+                "SHAP visualisations need the optional dependency 'shap'. " "Install with `pip install riskpilot[viz]`."
             )
 
         model = self.model
@@ -2920,17 +2751,11 @@ class BinaryPerformanceEvaluator:
             ),
         ):
             X_train = self.df_train[self.predictor_cols]
-            explainer = shap.LinearExplainer(
-                model, X_train, feature_perturbation="interventional"
-            )
+            explainer = shap.LinearExplainer(model, X_train, feature_perturbation="interventional")
         else:
             logger = logging.getLogger("riskpilot")
             X_train = self.df_train[self.predictor_cols]
-            background = (
-                shap.sample(X_train, 100, random_state=42)
-                if len(X_train) > 100
-                else X_train
-            )
+            background = shap.sample(X_train, 100, random_state=42) if len(X_train) > 100 else X_train
             logger.warning(
                 "\u26a0\ufe0f Falling back to shap.KernelExplainer. This could be "
                 "very slow for large datasets and many features. Consider using "
@@ -2975,15 +2800,12 @@ class BinaryPerformanceEvaluator:
     def _compute_shap_values_no_cache(self, X: pd.DataFrame) -> "shap.Explanation":
         if shap is None:  # pragma: no cover - optional dependency guard
             raise ImportError(
-                "SHAP visualisations need the optional dependency 'shap'. "
-                "Install with `pip install riskpilot[viz]`."
+                "SHAP visualisations need the optional dependency 'shap'. " "Install with `pip install riskpilot[viz]`."
             )
 
         expected_cols = list(getattr(self, "feature_names_", self.predictor_cols))
         if list(X.columns) != expected_cols:
-            raise ValueError(
-                "Input features must match model training columns: " f"{expected_cols}"
-            )
+            raise ValueError("Input features must match model training columns: " f"{expected_cols}")
 
         explainer = self._get_shap_explainer()
         if isinstance(explainer, shap.TreeExplainer):
@@ -2998,9 +2820,7 @@ class BinaryPerformanceEvaluator:
             )
         return explanation
 
-    def _compute_shap_values(
-        self, X: pd.DataFrame, *, split_name: str, use_cache: bool = False
-    ) -> "shap.Explanation":
+    def _compute_shap_values(self, X: pd.DataFrame, *, split_name: str, use_cache: bool = False) -> "shap.Explanation":
         """Compute SHAP values for a pre-processed feature matrix.
 
         The columns in ``X`` must match those used during model training. For
@@ -3023,8 +2843,7 @@ class BinaryPerformanceEvaluator:
 
         if shap is None:  # pragma: no cover - optional dependency guard
             raise ImportError(
-                "SHAP visualisations need the optional dependency 'shap'. "
-                "Install with `pip install riskpilot[viz]`."
+                "SHAP visualisations need the optional dependency 'shap'. " "Install with `pip install riskpilot[viz]`."
             )
 
         if os.getenv("BPE_SHAP_CACHE", "0") == "1":
@@ -3036,9 +2855,7 @@ class BinaryPerformanceEvaluator:
 
         expected_cols = list(getattr(self, "feature_names_", self.predictor_cols))
         if list(X.columns) != expected_cols:
-            raise ValueError(
-                "Input features must match model training columns: " f"{expected_cols}"
-            )
+            raise ValueError("Input features must match model training columns: " f"{expected_cols}")
 
         if use_cache and (split_name, self._fingerprint) in self._shap_cache:
             self._cache_hits += 1
@@ -3075,9 +2892,7 @@ class BinaryPerformanceEvaluator:
     def cache_stats(self) -> dict[str, Any]:
         """Return cache statistics."""
 
-        mem = sum(
-            getattr(v, "values", np.array([])).nbytes for v in self._shap_cache.values()
-        )
+        mem = sum(getattr(v, "values", np.array([])).nbytes for v in self._shap_cache.values())
         return {
             "hits": self._cache_hits,
             "misses": self._cache_misses,
@@ -3177,11 +2992,7 @@ class BinaryPerformanceEvaluator:
 
             df["split"] = split
             split_frames[split] = df
-            top = (
-                df.sort_values("importance", ascending=False)
-                .head(max_display)["feature"]
-                .tolist()
-            )
+            top = df.sort_values("importance", ascending=False).head(max_display)["feature"].tolist()
             top_features.append(set(top))
 
         features_keep = set().union(*top_features)
@@ -3230,15 +3041,9 @@ class BinaryPerformanceEvaluator:
             reference_split = None
 
         if reference_split is not None:
-            ref_imp = df[df["split"] == reference_split].set_index("feature")[
-                "importance"
-            ]
-            df = df.merge(
-                ref_imp.rename("ref_imp"), left_on="feature", right_index=True
-            )
-            variation = (df["importance"] - df["ref_imp"]).abs() / np.maximum(
-                np.abs(df["ref_imp"]), eps
-            )
+            ref_imp = df[df["split"] == reference_split].set_index("feature")["importance"]
+            df = df.merge(ref_imp.rename("ref_imp"), left_on="feature", right_index=True)
+            variation = (df["importance"] - df["ref_imp"]).abs() / np.maximum(np.abs(df["ref_imp"]), eps)
         else:
             count = df.groupby("feature")["importance"].transform("count")
             sum_imp = df.groupby("feature")["importance"].transform("sum")
@@ -3247,9 +3052,7 @@ class BinaryPerformanceEvaluator:
                 (sum_imp - df["importance"]) / (count - 1),
                 0.0,
             )
-            variation = (df["importance"] - others_mean).abs() / np.maximum(
-                np.abs(others_mean), eps
-            )
+            variation = (df["importance"] - others_mean).abs() / np.maximum(np.abs(others_mean), eps)
 
         df["variation"] = variation
         df["variation_flag"] = variation >= variation_threshold
@@ -3268,18 +3071,12 @@ class BinaryPerformanceEvaluator:
         if df.empty or reference_split not in df["split"].unique():
             return []
 
-        order = (
-            df[df["split"] == reference_split]
-            .sort_values("importance", ascending=False)["feature"]
-            .tolist()
-        )
+        order = df[df["split"] == reference_split].sort_values("importance", ascending=False)["feature"].tolist()
         top_features = order[:top_k]
         bullets: list[str] = []
         eps = np.finfo(float).eps
         for feat in top_features:
-            ref_imp = df[(df["feature"] == feat) & (df["split"] == reference_split)][
-                "importance"
-            ].iloc[0]
+            ref_imp = df[(df["feature"] == feat) & (df["split"] == reference_split)]["importance"].iloc[0]
             parts = []
             for split in df["split"].unique():
                 if split == reference_split:
@@ -3344,7 +3141,7 @@ class BinaryPerformanceEvaluator:
         >>> fig = evaluator._build_shap_bar_plot(
         ...     summary,
         ...     plot_type="layered",
-        ...     color_palette=["#1f77b4", "#ff7f0e"],
+        ...     color_palette=["#1f77b4", "#ff7f0e"],  # TODO(use COLOR_PRIMARY)
         ...     directionality=True,
         ...     annotate_variation=True,
         ...     title="SHAP – Train vs Test",
@@ -3359,16 +3156,10 @@ class BinaryPerformanceEvaluator:
             raise ValueError("plot_type must be 'bar' or 'layered'")
 
         # Pivot to get consistent ordering and handle missing splits
-        imp_wide = summary_df.pivot(
-            index="feature", columns="split", values="importance"
-        ).fillna(0)
-        dir_wide = summary_df.pivot(
-            index="feature", columns="split", values="direction"
-        ).fillna(0)
+        imp_wide = summary_df.pivot(index="feature", columns="split", values="importance").fillna(0)
+        dir_wide = summary_df.pivot(index="feature", columns="split", values="direction").fillna(0)
 
-        feature_order = (
-            imp_wide.mean(axis=1).sort_values(ascending=False).index.tolist()
-        )
+        feature_order = imp_wide.mean(axis=1).sort_values(ascending=False).index.tolist()
         imp_wide = imp_wide.loc[feature_order]
         dir_wide = dir_wide.loc[feature_order]
 
@@ -3393,9 +3184,7 @@ class BinaryPerformanceEvaluator:
             values = imp_wide[split].tolist()
             dirs = dir_wide[split].tolist()
             if directionality:
-                bar_colors = [
-                    _lighten(colors[split]) if d < 0 else colors[split] for d in dirs
-                ]
+                bar_colors = [_lighten(colors[split]) if d < 0 else colors[split] for d in dirs]
             else:
                 bar_colors = colors[split]
 
@@ -3453,8 +3242,7 @@ class BinaryPerformanceEvaluator:
 
         if shap is None:  # pragma: no cover - optional dependency guard
             raise ImportError(
-                "SHAP visualisations need the optional dependency 'shap'. "
-                "Install with `pip install riskpilot[viz]`."
+                "SHAP visualisations need the optional dependency 'shap'. " "Install with `pip install riskpilot[viz]`."
             )
 
         values = np.asarray(explanation.values)
@@ -3468,9 +3256,7 @@ class BinaryPerformanceEvaluator:
         mean_imp = df.abs().mean().sort_values(ascending=False)
         top = mean_imp.head(max_display).index.tolist()
         df_long = df_long[df_long["feature"].isin(top)]
-        df_long["feature"] = pd.Categorical(
-            df_long["feature"], categories=top[::-1], ordered=True
-        )
+        df_long["feature"] = pd.Categorical(df_long["feature"], categories=top[::-1], ordered=True)
 
         fig = px.strip(df_long, x="shap_value", y="feature", orientation="h")
         fig.update_traces(jitter=0.4)
@@ -3493,8 +3279,7 @@ class BinaryPerformanceEvaluator:
 
         if shap is None:  # pragma: no cover - optional dependency guard
             raise ImportError(
-                "SHAP visualisations need the optional dependency 'shap'. "
-                "Install with `pip install riskpilot[viz]`."
+                "SHAP visualisations need the optional dependency 'shap'. " "Install with `pip install riskpilot[viz]`."
             )
 
         values = np.asarray(explanation.values)
@@ -3536,8 +3321,7 @@ class BinaryPerformanceEvaluator:
 
         if shap is None:  # pragma: no cover - optional dependency guard
             raise ImportError(
-                "SHAP visualisations need the optional dependency 'shap'. "
-                "Install with `pip install riskpilot[viz]`."
+                "SHAP visualisations need the optional dependency 'shap'. " "Install with `pip install riskpilot[viz]`."
             )
 
         values = np.asarray(explanation.values)
@@ -3627,19 +3411,13 @@ class BinaryPerformanceEvaluator:
             if feature_groups:
                 missing = [f for f in group_members if f not in df.columns]
                 if missing:
-                    raise ValueError(
-                        f"Feature '{missing[0]}' specified in groups not found"
-                    )
-                grouped = {
-                    g: df[cols].sum(axis=1) for g, cols in feature_groups.items()
-                }
+                    raise ValueError(f"Feature '{missing[0]}' specified in groups not found")
+                grouped = {g: df[cols].sum(axis=1) for g, cols in feature_groups.items()}
                 remaining = df.drop(columns=set(group_members), errors="ignore")
                 df = pd.concat([remaining, pd.DataFrame(grouped)], axis=1)
 
             long_df = df.melt("__period", var_name="feature", value_name="importance")
-            agg = long_df.groupby(
-                ["__period", "feature"], observed=True
-            ).importance.mean()
+            agg = long_df.groupby(["__period", "feature"], observed=True).importance.mean()
             agg = agg.reset_index()
 
             counts = df["__period"].value_counts()
@@ -3779,21 +3557,14 @@ class BinaryPerformanceEvaluator:
             )
 
         if drift_df is not None:
-            df_drift = drift_df[
-                (drift_df["feature"] == feature) & drift_df["flag"]
-            ].copy()
+            df_drift = drift_df[(drift_df["feature"] == feature) & drift_df["flag"]].copy()
             for split in splits:
                 df_split = df_drift[df_drift["split"] == split]
                 if df_split.empty:
                     continue
-                y_lookup = df_feat[df_feat["split"] == split].set_index("period")[
-                    "importance"
-                ]
+                y_lookup = df_feat[df_feat["split"] == split].set_index("period")["importance"]
                 y_vals = y_lookup.reindex(df_split["period"]).values
-                hover = [
-                    f"{m}: {v:.3f}"
-                    for m, v in zip(df_split["metric"], df_split["value"])
-                ]
+                hover = [f"{m}: {v:.3f}" for m, v in zip(df_split["metric"], df_split["value"])]
                 fig.add_trace(
                     go.Scatter(
                         x=df_split["period"].astype(str),
@@ -3811,20 +3582,14 @@ class BinaryPerformanceEvaluator:
 
     # ---- Public wrappers ---- #
 
-    def plot_shap_beeswarm(
-        self, split: str = "train", *, max_display: int = 20
-    ) -> go.Figure:
+    def plot_shap_beeswarm(self, split: str = "train", *, max_display: int = 20) -> go.Figure:
         """Convenience wrapper around :meth:`_build_shap_beeswarm`."""
 
         if shap is None:
-            raise RuntimeError(
-                "plot_shap_beeswarm requires 'shap'; install riskpilot[viz] to enable."
-            )
+            raise RuntimeError("plot_shap_beeswarm requires 'shap'; install riskpilot[viz] to enable.")
 
         df_split = getattr(self, f"df_{split}")
-        expl = self._compute_shap_values(
-            df_split[self.predictor_cols], split_name=split
-        )
+        expl = self._compute_shap_values(df_split[self.predictor_cols], split_name=split)
         return self._build_shap_beeswarm(expl, max_display=max_display)
 
     def plot_shap_dependence(
@@ -3837,14 +3602,10 @@ class BinaryPerformanceEvaluator:
         """Wrapper for :meth:`_build_shap_dependence`."""
 
         if shap is None:
-            raise RuntimeError(
-                "plot_shap_dependence requires 'shap'; install riskpilot[viz] to enable."
-            )
+            raise RuntimeError("plot_shap_dependence requires 'shap'; install riskpilot[viz] to enable.")
 
         df_split = getattr(self, f"df_{split}")
-        expl = self._compute_shap_values(
-            df_split[self.predictor_cols], split_name=split
-        )
+        expl = self._compute_shap_values(df_split[self.predictor_cols], split_name=split)
         return self._build_shap_dependence(expl, feature=feature, color_by=color_by)
 
     def plot_shap_waterfall(
@@ -3857,14 +3618,10 @@ class BinaryPerformanceEvaluator:
         """Wrapper for :meth:`_build_shap_waterfall`."""
 
         if shap is None:
-            raise RuntimeError(
-                "plot_shap_waterfall requires 'shap'; install riskpilot[viz] to enable."
-            )
+            raise RuntimeError("plot_shap_waterfall requires 'shap'; install riskpilot[viz] to enable.")
 
         df_split = getattr(self, f"df_{split}")
-        expl = self._compute_shap_values(
-            df_split[self.predictor_cols], split_name=split
-        )
+        expl = self._compute_shap_values(df_split[self.predictor_cols], split_name=split)
         return self._build_shap_waterfall(expl, index=index, max_display=max_display)
 
     def export_report(
@@ -3959,22 +3716,15 @@ class BinaryPerformanceEvaluator:
         """High-level SHAP visualisation interface."""
 
         if shap is None:
-            raise RuntimeError(
-                "plot_shap requires 'shap'; install riskpilot[viz] to enable."
-            )
+            raise RuntimeError("plot_shap requires 'shap'; install riskpilot[viz] to enable.")
 
         splits = self._infer_splits(splits)
         shap_dict = {
-            s: self._compute_shap_values(
-                getattr(self, f"df_{s}")[self.predictor_cols], split_name=s
-            )
-            for s in splits
+            s: self._compute_shap_values(getattr(self, f"df_{s}")[self.predictor_cols], split_name=s) for s in splits
         }
 
         max_display = int(kwargs.pop("max_display", 20))
-        summary_df = self._prepare_shap_summary(
-            shap_dict, max_display=max_display, feature_groups=feature_groups
-        )
+        summary_df = self._prepare_shap_summary(shap_dict, max_display=max_display, feature_groups=feature_groups)
         summary_df = self._flag_variations(
             summary_df,
             reference_split=reference_split,
@@ -3983,11 +3733,7 @@ class BinaryPerformanceEvaluator:
 
         figs: list[go.Figure]
         if plot_type in {"bar", "layered"}:
-            params = {
-                k: kwargs.pop(k)
-                for k in ["color_palette", "title", "directionality"]
-                if k in kwargs
-            }
+            params = {k: kwargs.pop(k) for k in ["color_palette", "title", "directionality"] if k in kwargs}
             fig = self._build_shap_bar_plot(
                 summary_df,
                 plot_type=plot_type,
@@ -3997,49 +3743,31 @@ class BinaryPerformanceEvaluator:
             figs = [fig]
         elif plot_type == "beeswarm":
             bee_params = {k: kwargs.pop(k) for k in ["max_display"] if k in kwargs}
-            figs = [
-                self._build_shap_beeswarm(shap_dict[s], **bee_params) for s in splits
-            ]
+            figs = [self._build_shap_beeswarm(shap_dict[s], **bee_params) for s in splits]
         elif plot_type == "dependence":
             if not focus_feature:
                 raise ValueError("focus_feature is required for plot_type='dependence'")
             dep_params = {k: kwargs.pop(k) for k in ["color_by"] if k in kwargs}
-            figs = [
-                self._build_shap_dependence(
-                    shap_dict[s], feature=focus_feature, **dep_params
-                )
-                for s in splits
-            ]
+            figs = [self._build_shap_dependence(shap_dict[s], feature=focus_feature, **dep_params) for s in splits]
         elif plot_type == "waterfall":
             if record_index is None:
                 raise ValueError("record_index is required for plot_type='waterfall'")
             wf_params = {k: kwargs.pop(k) for k in ["max_display"] if k in kwargs}
-            figs = [
-                self._build_shap_waterfall(
-                    shap_dict[s], index=record_index, **wf_params
-                )
-                for s in splits
-            ]
+            figs = [self._build_shap_waterfall(shap_dict[s], index=record_index, **wf_params) for s in splits]
         elif plot_type == "trend":
             if not focus_feature:
                 raise ValueError("focus_feature is required for plot_type='trend'")
             if not self.date_col:
                 raise ValueError("date_col must be set for plot_type='trend'")
             date_lookup = {s: getattr(self, f"df_{s}")[self.date_col] for s in splits}
-            ts_params = {
-                k: kwargs.pop(k) for k in ["freq", "min_samples"] if k in kwargs
-            }
+            ts_params = {k: kwargs.pop(k) for k in ["freq", "min_samples"] if k in kwargs}
             ts_df = self._prepare_shap_time_series(
                 shap_dict,
                 date_lookup=date_lookup,
                 feature_groups=feature_groups,
                 **ts_params,
             )
-            trend_params = {
-                k: kwargs.pop(k)
-                for k in ["color_palette", "drift_df", "ref_band", "title"]
-                if k in kwargs
-            }
+            trend_params = {k: kwargs.pop(k) for k in ["color_palette", "drift_df", "ref_band", "title"] if k in kwargs}
             fig = self._build_shap_trend_plot(
                 ts_df,
                 feature=focus_feature,
