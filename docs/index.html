@@ -2,96 +2,202 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>RiskPilot – SHAP Diagnostics Guide</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="description" content="Developer guide for RiskPilot, a lightweight SHAP and Plotly toolkit for model explainability.">
-  <script type="application/ld+json">
-  {
-    "@context": "https://schema.org",
-    "@type": "SoftwareApplication",
-    "name": "RiskPilot",
-    "description": "Model explainability toolkit using SHAP and Plotly.",
-    "url": "https://github.com/joaaomaia/riskpilot",
-    "applicationCategory": "DataVisualization"
-  }
-  </script>
+  <title>RiskPilot – Model Performance & Explainability Toolkit</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="RiskPilot: audit‑ready visual diagnostics for binary classifiers (SHAP, PSI, KS, event‑rate, stress tests).">
   <link href="https://cdn.jsdelivr.net/npm/prismjs@1/themes/prism.css" rel="stylesheet">
   <style>
-    body{font-family:system-ui,Arial;padding:0 1rem;max-width:1024px;margin:auto}
-    header{padding:2rem 0;text-align:center}
-    h1{font-size:2.2rem;margin:0}
-    nav ul{display:flex;gap:1rem;flex-wrap:wrap;padding:0;list-style:none}
-    nav a{text-decoration:none}
-    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1.2rem}
-    footer{margin-top:4rem;padding:1rem 0;font-size:.9rem;text-align:center;color:#666}
+    :root {
+      --accent:#1f77b4;
+      --bg:#fafafa;
+      --fg:#222;
+      --muted:#666;
+    }
+    *{box-sizing:border-box}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;margin:0;padding:0 1rem;max-width:1100px;margin-inline:auto;background:var(--bg);color:var(--fg);line-height:1.55}
+    header{padding:3rem 0 2rem;text-align:center}
+    h1{margin:0;font-size:2.4rem;color:var(--accent)}
+    nav ul{display:flex;gap:1rem;flex-wrap:wrap;justify-content:center;padding:0;margin:2rem 0 3rem;list-style:none}
+    nav a{padding:.35rem .75rem;border-radius:.35rem;text-decoration:none;color:var(--accent);border:1px solid var(--accent17,rgba(31,119,180,.17));transition:.2s}
+    nav a:hover{background:var(--accent);color:#fff}
+    section{margin-block:3.5rem}
+    h2{margin-top:0;color:var(--accent)}
+    pre{background:#272822;color:#f8f8f2;padding:1rem;border-radius:.4rem;overflow:auto}
+    code[class*="language-"]{font-size:.9rem}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:1.4rem}
+    figure{margin:0;border:1px solid #ddd;border-radius:.35rem;overflow:hidden;background:#fff}
+    figure>img{display:block;width:100%;height:auto}
+    figcaption{font-size:.85rem;padding:.5rem;text-align:center;background:#fafafa}
+    details{border:1px solid #ddd;border-radius:.35rem;padding:.85rem;background:#fff;margin-bottom:.85rem}
+    details summary{cursor:pointer;font-weight:600;color:var(--accent)}
+    footer{margin:4rem 0 2rem;text-align:center;font-size:.9rem;color:var(--muted)}
   </style>
 </head>
 <body>
 <header>
-  <h1>RiskPilot <small style="font-size:1rem;">– Model Explainability Toolkit</small></h1>
-  <p>A lightweight wrapper around SHAP + Plotly for audit-ready visual diagnostics.</p>
+  <h1>RiskPilot <small style="font-size:1rem;font-weight:normal">v{{__version__}}</small></h1>
+  <p>Audit‑ready visual diagnostics for binary classifiers – from <strong>MCC</strong> to <strong>SHAP</strong>, <strong>PSI</strong> &amp; <strong>stress testing</strong>.</p>
 </header>
 
 <nav>
   <ul>
+    <li><a href="#install">Install</a></li>
     <li><a href="#quick">Quick Start</a></li>
-    <li><a href="#api">API Reference</a></li>
-    <li><a href="#gallery">Plot Gallery</a></li>
+    <li><a href="#features">Key Features</a></li>
+    <li><a href="#api">API</a></li>
+    <li><a href="#examples">Code Examples</a></li>
+    <li><a href="#gallery">Gallery</a></li>
     <li><a href="#faq">FAQ</a></li>
   </ul>
 </nav>
 
+<section id="install">
+  <h2>Installation</h2>
+  <pre><code class="language-bash">pip install riskpilot[viz,binning]</code></pre>
+  <p><em>Optional extras</em>:</p>
+  <ul>
+    <li><code>viz</code> &nbsp;→&nbsp; <code>shap</code>, <code>plotly</code>, <code>kaleido</code></li>
+    <li><code>binning</code> &nbsp;→&nbsp; <code>optbinning</code> for automatic homogeneous groups</li>
+  </ul>
+</section>
+
 <section id="quick">
   <h2>Quick Start</h2>
-  <pre><code class="language-python">
-from riskpilot.evaluation import BinaryPerformanceEvaluator
-evaluator = BinaryPerformanceEvaluator(...)
-fig = evaluator.plot_shap(plot_type="bar", summary=True)
-fig.show()
+  <pre><code class="language-python">from riskpilot.evaluation import BinaryPerformanceEvaluator
+# Assume you already have df_train/test with predictor columns + 'default_90d'
+
+model = joblib.load("clf.joblib")   # any estimator with predict_proba()
+
+eval = BinaryPerformanceEvaluator(
+    model=model,
+    df_train=df_train,
+    df_test=df_test,
+    target_col="default_90d",
+    id_cols=["contract_id"],
+    date_col="snapshot_date",   # enables time‑series plots
+    save_dir="figs"              # auto‑saves PNGs/HTML if save=True
+)
+
+# 1. Core metrics (MCC, AUC, Brier …)
+print(eval.compute_metrics())
+
+# 2. Visual diagnostics
+_ = eval.plot_confusion(save=True)
+_ = eval.plot_calibration(display=True)
+rate, share = eval.plot_event_rate(separated=True)
+
+# 3. Explainability
+shap_bar = eval.plot_shap(plot_type="layered", summary=True)
+shap_bar.show()
+
+# 4. Stress‑test with synthetic vintages
+# eval.run_stress_test(synthetic_gen=generator)
   </code></pre>
 </section>
 
-<section id="api">
-  <h2>API Reference</h2>
+<section id="features">
+  <h2>Key Features</h2>
   <ul>
-    <li><a href="#compute_metrics">compute_metrics()</a></li>
-    <li><a href="#plot_shap">plot_shap()</a></li>
-    <li><a href="#export_report">export_report()</a></li>
-    <li><a href="#clear_shap_cache">clear_shap_cache()</a></li>
+    <li><strong>Metrics</strong> – MCC, AUC‑ROC/PR, Precision, Recall, Brier / per period.</li>
+    <li><strong>Visuals</strong> – Confusion, Calibration, KS evolution, PSI, Event‑Rate, Histograms, Decile KS.</li>
+    <li><strong>Homogeneous groups</strong> – automatic (OptimalBinning) or custom <code>n</code>‑quantiles.</li>
+    <li><strong>Drift detection</strong> – PSI thresholds &amp; histogram drift highlighting.</li>
+    <li><strong>Explainability</strong> – unified SHAP wrapper (Tree/Linear → Kernel fallback with friendly log).</li>
+    <li><strong>Caching</strong> – opt‑in SHAP cache (<code>use_cache=False</code> by default).</li>
+    <li><strong>Stress‑testing</strong> – plug any synthetic generator via <code>LookAhead</code>.</li>
+    <li><strong>Report export</strong> – single call bundles figures, CSV, TXT insights &amp; ZIP.</li>
   </ul>
-  <h3 id="compute_metrics">compute_metrics()</h3>
-  <p>Calculate metrics like MCC, AUC, Precision and more.</p>
-  <pre><code class="language-python">compute_metrics(by_date_col=False)</code></pre>
+</section>
 
-  <h3 id="plot_shap">plot_shap()</h3>
-  <p>Unified entry-point for all SHAP visualisations. Parameters:</p>
-  <pre><code class="language-python">plot_shap(plot_type="bar", splits=["train","test"], ...)</code></pre>
+<section id="api">
+  <h2>High‑level API</h2>
+  <table>
+    <thead><tr><th>Method</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td><code>compute_metrics(by_date_col=False)</code></td><td>Return DataFrame of MCC, AUC, Precision, Recall, Brier.<br>Set <code>by_date_col=True</code> for vintage metrics.</td></tr>
+      <tr><td><code>plot_confusion()</code></td><td>Side‑by‑side confusion matrices with KS/Youden threshold option.</td></tr>
+      <tr><td><code>plot_calibration()</code></td><td>Reliability curves (train / test / val) with Brier score in subtitle.</td></tr>
+      <tr><td><code>plot_event_rate()</code></td><td>Bad‑rate &amp; share by homogeneous group. <code>separated=True</code> → one subplot per split.</td></tr>
+      <tr><td><code>plot_histograms()</code></td><td>Distribution drift with PSI/KS annotation, KDE fill, legend toggle &amp; drift bars.</td></tr>
+      <tr><td><code>plot_psi()</code></td><td>PSI over time for 1 or N features, smart‑view, thresholds 0.10 / 0.25.</td></tr>
+      <tr><td><code>plot_ks()</code></td><td>KS per vintage with 0.20 reference line.</td></tr>
+      <tr><td><code>plot_group_radar()</code></td><td>Radar chart of scaled feature means per GH – combined / separated / animated.</td></tr>
+      <tr><td><code>plot_decile_ks()</code></td><td>Decile analysis wrapper with KS &amp; cumulative gains.</td></tr>
+      <tr><td><code>plot_sankey_migration()</code></td><td>GH migration flows between periods (period→period or net).</td></tr>
+      <tr><td><code>plot_shap(**)</code></td><td>Unified entry – <code>bar</code>, <code>layered</code>, <code>beeswarm</code>, <code>dependence</code>, <code>trend</code>, <code>waterfall</code>.</td></tr>
+      <tr><td><code>run_stress_test()</code></td><td>Generate synthetic vintages &amp; run selected eval functions.</td></tr>
+      <tr><td><code>export_report()</code></td><td>Persist figs, CSV summary &amp; bullet insights (optionally zipped).</td></tr>
+    </tbody>
+  </table>
+</section>
 
-  <h3 id="export_report">export_report()</h3>
-  <p>Persist figures + CSV summary + bullets; returns Path.</p>
+<section id="examples">
+  <h2>Code Examples</h2>
+  <h3>1. Histogram Drift with PSI &amp; custom colours</h3>
+  <pre><code class="language-python">hist = eval.plot_histograms(
+    feature=["limit_util_pct","age"],
+    reference={"train":[202201,202202]},
+    compare={"test":[202401]},
+    bins=20,
+    drift_metric="psi",
+    kde=True,
+    show_legend=True,
+    kde_fill_alpha=0.25,
+    cmap_reference="#4c78a8",
+    cmap_compare="#f58518"
+)
+  </code></pre>
+  <h3>2. SHAP layered bar with variation flags</h3>
+  <pre><code class="language-python">fig = eval.plot_shap(
+    plot_type="layered",
+    splits=["train","test"],
+    annotate_variation=True,
+    variation_threshold=0.4,
+    summary=True,
+)
+fig.show()</code></pre>
+  <h3>3. Cache management</h3>
+  <pre><code class="language-python"># Force fresh SHAP values
+train_expl = eval._compute_shap_values(df_train[X_cols], split_name="train", use_cache=False)
 
-  <h3 id="clear_shap_cache">clear_shap_cache()</h3>
-  <p>Delete cached SHAP values for given splits.</p>
+# Clear disk &amp; memory cache
+eval.clear_shap_cache()
+print(eval.cache_stats())</code></pre>
 </section>
 
 <section id="gallery">
   <h2>Plot Gallery</h2>
   <div class="grid">
-    <figure><img src="img/bar.png" alt="Bar importance"/><figcaption>Bar importance</figcaption></figure>
-    <figure><img src="img/beeswarm.png" alt="Beeswarm plot"/><figcaption>Beeswarm</figcaption></figure>
-    <figure><img src="img/dependence.png" alt="Dependence plot"/><figcaption>Dependence</figcaption></figure>
-    <figure><img src="img/waterfall.png" alt="Waterfall plot"/><figcaption>Waterfall</figcaption></figure>
+    <figure><img src="img/confusion.png" alt="Confusion"/><figcaption>Confusion</figcaption></figure>
+    <figure><img src="img/calibration.png" alt="Calibration"/><figcaption>Calibration</figcaption></figure>
+    <figure><img src="img/event_rate.png" alt="Event‑Rate"/><figcaption>Event‑Rate</figcaption></figure>
+    <figure><img src="img/histogram.png" alt="Histograms"/><figcaption>Histogram Drift</figcaption></figure>
+    <figure><img src="img/psi.png" alt="PSI"/><figcaption>PSI Timeline</figcaption></figure>
+    <figure><img src="img/ks.png" alt="KS"/><figcaption>KS Evolution</figcaption></figure>
+    <figure><img src="img/radar.png" alt="Radar"/><figcaption>Radar GH</figcaption></figure>
+    <figure><img src="img/sankey.png" alt="Sankey"/><figcaption>Sankey Migration</figcaption></figure>
+    <figure><img src="img/shap_bar.png" alt="SHAP Bar"/><figcaption>SHAP Layered Bar</figcaption></figure>
   </div>
 </section>
 
 <section id="faq">
   <h2>FAQ</h2>
-  <details><summary>Kaleido error when saving PNG</summary>
-    <p>Install <code>pip install kaleido</code> and retry.</p>
+  <details><summary><code>kaleido</code> export error</summary>
+    <p>Install the static image backend:</p>
+    <pre><code>pip install kaleido</code></pre>
   </details>
-  <details><summary>"No module named shap"</summary>
-    <p>Install the optional <code>viz</code> extra:<br>
-       <code>pip install riskpilot[viz]</code></p>
+  <details><summary>"No module named <code>shap</code>"</summary>
+    <p>Install the <code>viz</code> extra:</p>
+    <pre><code>pip install riskpilot[viz]</code></pre>
+  </details>
+  <details><summary>Why is <strong>KernelExplainer</strong> slow?</summary>
+    <p>
+      <code>BinaryPerformanceEvaluator</code> automatically chooses
+      <em>Tree</em> or <em>Linear</em> explainers when available. The
+      SHAP cache (<code>use_cache</code>) is <strong>disabled by default</strong> – enable it via
+      <code>eval._compute_shap_values(..., use_cache=True)</code> or set
+      <code>--use-cache</code> in your CLI script to speed‑up repeated calls.
+    </p>
   </details>
   <details><summary>My notebook cell never finishes</summary>
     <p>Check the logs for a warning that <code>shap.KernelExplainer</code> was used.
@@ -101,7 +207,7 @@ fig.show()
 </section>
 
 <footer>
-  RiskPilot © 2025 – version {{__version__}}
+  RiskPilot © 2025 &nbsp;•&nbsp; MIT License &nbsp;•&nbsp; <a href="https://github.com/joaaomaia/riskpilot" target="_blank" rel="noopener">GitHub</a>
 </footer>
 
 <script src="https://cdn.jsdelivr.net/npm/prismjs@1/prism.min.js"></script>
