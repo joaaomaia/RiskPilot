@@ -50,10 +50,19 @@ jobs:
       - uses: actions/checkout@v4
       - name: Commit build
         run: |
+          if [ ! -d docs ]; then
+            echo "docs directory not found"
+            exit 1
+          fi
+          docs_tmp="$(mktemp -d)"
+          trap 'rm -rf "$docs_tmp"' EXIT
+          cp -R docs/. "$docs_tmp"/
+
           git config user.name  "gh-pages bot"
           git config user.email "bot@example.com"
           git switch --orphan gh-pages
-          cp -r docs/* .
+          git rm -rf . || true
+          cp -R "$docs_tmp"/. .
           git add .
           git commit -m "docs: update $(date -u +%Y-%m-%d)"
           git push -f origin gh-pages
