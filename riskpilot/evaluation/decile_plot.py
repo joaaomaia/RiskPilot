@@ -67,21 +67,26 @@ def _assign_equal_freq_bins(series: pd.Series, n_bins: int = 10, ascending: bool
 
     Notes
     -----
-    The implementation uses :pyfunc:`pandas.qcut`.  Duplicate bin edges are
-    handled by adding a tiny amount of random noise.
+    The implementation uses a deterministic first-rank before
+    :pyfunc:`pandas.qcut`, so tied scores produce reproducible bins.
     """
-    # Add tiny jitter if many ties would cause qcut to fail
-    jitter = np.random.uniform(0, 1e-9, size=series.shape[0])
-    ranked = series + jitter
+    if n_bins < 1:
+        raise ValueError("`n_bins` must be >= 1.")
 
-    if not ascending:
-        ranked = -ranked
+    numeric = pd.to_numeric(series, errors="coerce")
+    ranks = numeric.rank(method="first", ascending=ascending)
+    valid = ranks.notna()
+    bins = pd.Series(pd.NA, index=series.index, dtype="Int64")
+    if valid.sum() == 0:
+        return bins
 
-    bins = pd.qcut(
-        ranked.rank(method="first"),
-        q=n_bins,
-        labels=range(1, n_bins + 1),
-    ).astype(int)
+    q = min(int(n_bins), int(valid.sum()))
+    labels = range(1, q + 1)
+    bins.loc[valid] = pd.qcut(
+        ranks.loc[valid],
+        q=q,
+        labels=labels,
+    ).astype("Int64")
 
     return bins
 
@@ -136,19 +141,53 @@ def ks_table(
     if score_col not in df.columns:
         raise KeyError(f"Score column '{score_col}' not found.")
 
-    work = df[[score_col, target_col]].copy()
+    columns = [
+        bin_col,
+        "total",
+        "bad",
+        "good",
+        "bad_rate",
+        "cum_bad",
+        "cum_good",
+        "KS",
+        "metric_status",
+    ]
+
+    work = df[[score_col, target_col]].copy().dropna(subset=[score_col, target_col])
+    if work.empty:
+        return pd.DataFrame(columns=columns), float("nan")
+
     work[bin_col] = _assign_equal_freq_bins(work[score_col], n_bins=n_bins, ascending=ascending)
+    work = work.dropna(subset=[bin_col])
+    if work.empty:
+        return pd.DataFrame(columns=columns), float("nan")
+    work[bin_col] = work[bin_col].astype(int)
 
     grp = work.groupby(bin_col, observed=True).agg(total=(target_col, "size"), bad=(target_col, "sum")).sort_index()
     grp["good"] = grp["total"] - grp["bad"]
     grp["bad_rate"] = grp["bad"] / grp["total"]
-    grp["cum_bad"] = grp["bad"].cumsum() / grp["bad"].sum()
-    grp["cum_good"] = grp["good"].cumsum() / grp["good"].sum()
-    grp["KS"] = (grp["cum_bad"] - grp["cum_good"]).abs()
 
-    ks_value = grp["KS"].max()
+    total_bad = grp["bad"].sum()
+    total_good = grp["good"].sum()
+    if total_bad > 0:
+        grp["cum_bad"] = grp["bad"].cumsum() / total_bad
+    else:
+        grp["cum_bad"] = np.nan
+    if total_good > 0:
+        grp["cum_good"] = grp["good"].cumsum() / total_good
+    else:
+        grp["cum_good"] = np.nan
 
-    return grp.reset_index(), ks_value
+    if total_bad > 0 and total_good > 0:
+        grp["KS"] = (grp["cum_bad"] - grp["cum_good"]).abs()
+        grp["metric_status"] = "ok"
+        ks_value = float(grp["KS"].max())
+    else:
+        grp["KS"] = np.nan
+        grp["metric_status"] = "single_class"
+        ks_value = float("nan")
+
+    return grp.reset_index()[columns], ks_value
 
 
 # ============================ Plotting ===================================
@@ -195,9 +234,16 @@ def decile_analysis_plot(
     """
     table, ks_value = ks_table(df, score_col, target_col, n_bins=n_bins, ascending=ascending)
 
-    mean_default_rate = table["bad"].sum() / table["total"].sum()
-
     fig = make_subplots(specs=[[{"secondary_y": True}]])
+    if table.empty:
+        fig.update_layout(
+            title=f"{title_prefix} - KS N/A",
+            title_font_family=font_family,
+            template="simple_white",
+        )
+        return fig, ks_value, table
+
+    mean_default_rate = table["bad"].sum() / table["total"].sum()
 
     # Bars – #contracts per decile
     fig.add_bar(
@@ -249,7 +295,7 @@ def decile_analysis_plot(
 
     # Layout / title
     fig.update_layout(
-        title=f"{title_prefix} – KS {ks_value:.2%}",
+        title=f"{title_prefix} - KS {'N/A' if pd.isna(ks_value) else f'{ks_value:.2%}'}",
         title_font_family=font_family,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         bargap=0.2,
