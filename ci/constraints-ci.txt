@@ -1,0 +1,19 @@
+# CI constraints for RiskPilot numerical stack.
+#
+# Purpose:
+# - stabilize GitHub Actions dependency resolution;
+# - avoid unexpected breakage from newly released numerical packages;
+# - keep the public package dependency contract unchanged for now.
+#
+# These constraints are intentionally CI-scoped. They do not imply that
+# RiskPilot will never support newer versions. They define a known-safe
+# range for automated tests until compatibility is explicitly validated.
+
+numpy>=1.26,<2.0
+pandas>=2.2,<2.3
+scipy>=1.12,<1.15
+scikit-learn>=1.4,<1.6
+pyarrow>=15,<18
+seaborn>=0.13,<0.14
+matplotlib>=3.8,<3.10
+plotly>=5.20,<6.0

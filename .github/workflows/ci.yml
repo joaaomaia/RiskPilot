@@ -16,7 +16,25 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install deps (full)
         run: |
-          pip install -e .[dev,viz,binning]
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,viz,binning]" -c ci/constraints-ci.txt
+      - name: Dependency diagnostics
+        run: |
+          python - <<'PY'
+          import sys
+          import numpy
+          import pandas
+          import scipy
+          import sklearn
+
+          print("python", sys.version)
+          print("numpy", numpy.__version__, numpy.__file__)
+          print("pandas", pandas.__version__, pandas.__file__)
+          print("scipy", scipy.__version__, scipy.__file__)
+          print("sklearn", sklearn.__version__, sklearn.__file__)
+          PY
+          python -m pip check
+          python -m pip freeze
       - name: Run tests
         run: |
           pytest -q --cov=riskpilot.evaluation
