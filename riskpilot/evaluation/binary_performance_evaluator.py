@@ -562,7 +562,7 @@ class BinaryPerformanceEvaluator:
         y_true: Sequence[int] | None = None,
         y_pred_proba: Sequence[float] | None = None,
         *,
-        threshold: float | str = 0.5,
+        threshold: float | str | None = None,
         splits: list[str] | None = None,
         normalize: bool = False,
         cmap: str = "Blues",
@@ -582,8 +582,9 @@ class BinaryPerformanceEvaluator:
             Valores verdadeiros e probabilidades preditas para gerar uma única
             matriz. Se omitidos, são utilizados os dados internos divididos em
             ``splits``.
-        threshold : float | {"ks","youden"}
-            Cut-off fixo ou regra baseada no split Train.
+        threshold : float | {"ks","youden"} | None
+            Cut-off fixo, regra baseada no split Train, ou ``None`` para usar
+            ``self.threshold``.
         splits : list[str] | None
             Lista de splits desejados ("train","test","val"). None → todos disponíveis.
         normalize : bool
@@ -605,19 +606,19 @@ class BinaryPerformanceEvaluator:
         from sklearn.metrics import confusion_matrix, roc_curve
 
         # ---------------- helpers ---------------- #
-        def _pos_idx() -> int:
-            """Retorna o índice da classe positiva (1) no predict_proba."""
-            return list(self.model.classes_).index(1)
-
         def _best_threshold(y, p, meth: str) -> float:
             fpr, tpr, thr = roc_curve(y, p)
             return float(thr[np.nanargmax(tpr - fpr)])  # KS = Youden
+
+        effective_threshold = self.threshold if threshold is None else threshold
 
         # ---------------- provided arrays ---------------- #
         if y_true is not None and y_pred_proba is not None:
             y_true = np.asarray(y_true)
             y_pred_proba = np.asarray(y_pred_proba)
-            y_pred = (y_pred_proba >= float(threshold)).astype(int)
+            if isinstance(effective_threshold, str):
+                effective_threshold = _best_threshold(y_true, y_pred_proba, effective_threshold.lower())
+            y_pred = (y_pred_proba >= float(effective_threshold)).astype(int)
             cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
             cm_pct = cm / cm.sum()
             heat = cm_pct if normalize else cm
@@ -665,12 +666,11 @@ class BinaryPerformanceEvaluator:
             if invalid:
                 raise ValueError(f"Splits inválidos: {invalid}")
 
-        pos_idx = _pos_idx()
-        if isinstance(threshold, str):
+        if isinstance(effective_threshold, str):
             ref = available["train"]
             thr_y = ref[self.target_col].values
-            thr_p = self.model.predict_proba(ref[self.predictor_cols])[:, pos_idx]
-            threshold = _best_threshold(thr_y, thr_p, threshold.lower())
+            thr_p = ref[self.score_col_].values
+            effective_threshold = _best_threshold(thr_y, thr_p, effective_threshold.lower())
 
         n = len(splits)
         fig, axes = plt.subplots(1, n, figsize=(figsize[0] * n, figsize[1]))
@@ -680,8 +680,8 @@ class BinaryPerformanceEvaluator:
         for ax, split in zip(axes, splits):
             df_split = available[split]
             y_true_s = df_split[self.target_col].values
-            y_proba_s = self.model.predict_proba(df_split[self.predictor_cols])[:, pos_idx]
-            y_pred_s = (y_proba_s >= float(threshold)).astype(int)
+            y_proba_s = df_split[self.score_col_].values
+            y_pred_s = (y_proba_s >= float(effective_threshold)).astype(int)
 
             cm = confusion_matrix(y_true_s, y_pred_s, labels=[0, 1])
             cm_pct = cm / cm.sum()
