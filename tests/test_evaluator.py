@@ -83,11 +83,51 @@ def test_decile_ks_wrapper():
     assert isinstance(fig, go.Figure)
 
 
-def test_group_col_required_without_auto():
+def test_init_without_groups_uses_default_none_and_compute_metrics():
     train, test = _create_split()
     model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
 
-    with pytest.raises(ValueError):
+    evaluator = BinaryPerformanceEvaluator(
+        model=model,
+        df_train=train,
+        df_test=test,
+        target_col="target",
+        id_cols=["id"],
+        date_col="date",
+    )
+
+    assert evaluator.homogeneous_group is None
+    assert evaluator.group_ is None
+    assert evaluator.binning_table_ is None
+    metrics = evaluator.compute_metrics()
+    assert "AUC_ROC" in metrics.columns
+
+
+def test_init_explicit_none_without_group_col_compute_metrics():
+    train, test = _create_split()
+    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
+
+    evaluator = BinaryPerformanceEvaluator(
+        model=model,
+        df_train=train,
+        df_test=test,
+        target_col="target",
+        id_cols=["id"],
+        date_col="date",
+        group_col=None,
+        homogeneous_group=None,
+    )
+
+    assert evaluator.group_ is None
+    metrics = evaluator.compute_metrics()
+    assert metrics.loc["Test", "metric_status"] == "ok"
+
+
+def test_group_col_validated_when_provided_without_auto():
+    train, test = _create_split()
+    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
+
+    with pytest.raises(KeyError):
         BinaryPerformanceEvaluator(
             model=model,
             df_train=train,
@@ -95,6 +135,7 @@ def test_group_col_required_without_auto():
             target_col="target",
             id_cols=["id"],
             date_col="date",
+            group_col="missing_group",
             homogeneous_group=None,
         )
 
