@@ -6,11 +6,16 @@ import plotly.graph_objects as go
 import pytest
 from sklearn.datasets import make_classification
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import confusion_matrix
 
 from riskpilot.evaluation import BinaryPerformanceEvaluator
 
 optbinning_available = find_spec("optbinning") is not None
 skip_if_no_optbinning = pytest.mark.skipif(not optbinning_available, reason="optbinning not installed")
+
+
+def _confusion_heat(fig):
+    return np.asarray(fig.axes[0].collections[0].get_array()).reshape(2, 2)
 
 
 def _create_split():
@@ -81,6 +86,91 @@ def test_decile_ks_wrapper():
 
     fig = evaluator.plot_decile_ks(n_bins=5)
     assert isinstance(fig, go.Figure)
+
+
+def test_plot_confusion_default_uses_evaluator_threshold_with_arrays():
+    train, test = _create_split()
+    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
+    evaluator = BinaryPerformanceEvaluator(
+        model=model,
+        df_train=train,
+        df_test=test,
+        target_col="target",
+        id_cols=["id"],
+        date_col="date",
+        threshold=0.35,
+    )
+    y_true = np.array([0, 0, 1, 1])
+    y_pred_proba = np.array([0.20, 0.40, 0.45, 0.80])
+
+    fig = evaluator.plot_confusion(y_true, y_pred_proba)
+
+    np.testing.assert_array_equal(_confusion_heat(fig), np.array([[1, 1], [0, 2]]))
+    assert evaluator.threshold == 0.35
+
+
+def test_plot_confusion_explicit_threshold_overrides_evaluator_threshold():
+    train, test = _create_split()
+    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
+    evaluator = BinaryPerformanceEvaluator(
+        model=model,
+        df_train=train,
+        df_test=test,
+        target_col="target",
+        id_cols=["id"],
+        date_col="date",
+        threshold=0.35,
+    )
+    y_true = np.array([0, 0, 1, 1])
+    y_pred_proba = np.array([0.20, 0.40, 0.45, 0.80])
+
+    fig = evaluator.plot_confusion(y_true, y_pred_proba, threshold=0.50)
+
+    np.testing.assert_array_equal(_confusion_heat(fig), np.array([[2, 0], [1, 1]]))
+    assert evaluator.threshold == 0.35
+
+
+def test_plot_confusion_internal_split_uses_evaluator_threshold():
+    train, test = _create_split()
+    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
+    evaluator = BinaryPerformanceEvaluator(
+        model=model,
+        df_train=train,
+        df_test=test,
+        target_col="target",
+        id_cols=["id"],
+        date_col="date",
+        threshold=0.35,
+    )
+    proba = np.resize(np.array([0.20, 0.40, 0.45, 0.80]), len(evaluator.df_test))
+    y_true = np.resize(np.array([0, 0, 1, 1]), len(evaluator.df_test))
+    evaluator.df_test[evaluator.score_col_] = proba
+    evaluator.df_test[evaluator.target_col] = y_true
+
+    fig = evaluator.plot_confusion(splits=["test"])
+    expected = confusion_matrix(y_true, (proba >= 0.35).astype(int), labels=[0, 1])
+
+    np.testing.assert_array_equal(_confusion_heat(fig), expected)
+    assert evaluator.threshold == 0.35
+
+
+def test_plot_confusion_symbolic_threshold_still_works():
+    train, test = _create_split()
+    model = LogisticRegression().fit(train[[f"f{i}" for i in range(5)]], train["target"])
+    evaluator = BinaryPerformanceEvaluator(
+        model=model,
+        df_train=train,
+        df_test=test,
+        target_col="target",
+        id_cols=["id"],
+        date_col="date",
+        threshold=0.35,
+    )
+
+    fig = evaluator.plot_confusion(splits=["test"], threshold="ks")
+
+    assert fig.axes
+    assert evaluator.threshold == 0.35
 
 
 def test_init_without_groups_uses_default_none_and_compute_metrics():
